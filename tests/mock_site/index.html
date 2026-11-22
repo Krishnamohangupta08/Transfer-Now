@@ -1,0 +1,46 @@
+<!doctype html><html><body>
+<!-- Minimal stand-in for the TransferNow SPA used by the automated tests.
+     During the "upload" phase it animates a real aria progressbar plus a
+     percent label, exactly like the live site, so the engine's DOM progress
+     scraper (PROGRESS_JS) is exercised end-to-end offline. -->
+<input type="file" multiple style="display:none">
+<div id="app"><p>Welcome</p><input type="file" multiple style="display:none"></div>
+<script>
+const inputs = document.querySelectorAll('input[type=file]');
+const app = document.getElementById('app');
+inputs.forEach(i => i.addEventListener('change', () => {
+  if (!i.files.length) return;
+  app.innerHTML = '<button id="mode">Create a link</button>';
+  document.getElementById('mode').onclick = () => {
+    // The live CTA appends the file count + total size ("Get a link · 1 file ·
+    // 0.0 MB") since the redesign; the engine must still find it (fuzzy match).
+    const f = i.files[0];
+    const mb = (f.size / 1048576).toFixed(1);
+    const n = i.files.length;
+    app.innerHTML = '<input type="email"><button id="go">Get a link \u00b7 '
+      + n + (n === 1 ? ' file' : ' files') + ' \u00b7 ' + mb + ' MB</button>';
+    document.getElementById('go').onclick = () => {
+      const em = app.querySelector('input[type=email]').value;
+      if (!em.includes('@')) { app.insertAdjacentHTML('beforeend','<p>bad email</p>'); return; }
+      let pct = 4;
+      app.innerHTML = '<p>Uploading…</p>'
+        + '<div id="bar" role="progressbar" aria-valuemax="100" aria-valuenow="4" style="height:6px"></div>'
+        + '<p id="pct">4%</p><p id="bytes">0.1 MB of 3.0 MB</p>';
+      const iv = setInterval(() => {
+        pct = Math.min(99, pct + 7);
+        const bar = document.getElementById('bar'), lbl = document.getElementById('pct');
+        const byt = document.getElementById('bytes');
+        if (!bar || !lbl) { clearInterval(iv); return; }
+        bar.setAttribute('aria-valuenow', String(pct));
+        lbl.textContent = pct + '%';
+        byt.textContent = (pct * 0.03).toFixed(1) + ' MB of 3.0 MB';
+      }, 120);
+      setTimeout(() => {
+        clearInterval(iv);
+        app.innerHTML = '<p>Your link is ready, available for 7 days</p>' +
+          '<input readonly value="https://www.transfernow.net/dl/MOCK123abc">';
+      }, parseInt(location.hash.slice(1) || '2600'));
+    };
+  };
+}));
+</script></body></html>
