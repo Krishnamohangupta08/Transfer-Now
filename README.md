@@ -104,7 +104,7 @@ A desktop experience built around convenience and customization.
 Clone the repository:
 
 ```bash
-git clone https://github.com/<your-username>/transfer-now.git
+git clone https://github.com/Krishnamohangupta08/Transfer-Now.git
 cd transfer-now
 ```
 
