@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 import time
 from datetime import datetime, timedelta
 from typing import Optional
 
+from PyQt6 import sip
 from PyQt6.QtCore import (
     QPoint, QPointF, QPropertyAnimation, QRectF, QTimer, QUrl, Qt, pyqtProperty, pyqtSignal,
 )
@@ -15,16 +17,19 @@ from PyQt6.QtGui import (
     QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPen, QPixmap,
 )
 from PyQt6.QtWidgets import (
-    QFileDialog, QFrame, QGraphicsDropShadowEffect, QLabel, QProgressBar, QSizePolicy, QWidget,
+    QApplication, QFileDialog, QFrame, QGraphicsDropShadowEffect, QLabel, QProgressBar,
+    QScrollArea, QSizePolicy, QWidget,
 )
 
+from core import limits, ziputil
 from core.emailgen import random_email
 from core.engine import MAX_BYTES, STEPS, EngineOptions
 from core.store import human_size
-from core.tasks import FolderScanThread, UploadThread
+from core.tasks import FolderScanThread, UploadThread, ZipThread, screen_batch
 from ..hub import HUB
 from ..i18n import tr
 from ..menus import LineEdit, RoundMenu
+from ..smoothscroll import enable_smooth_scroll
 from PyQt6.QtWidgets import QLineEdit as _QLineEdit
 QLineEdit_Trailing = _QLineEdit.ActionPosition.TrailingPosition
 from .. import icons, motion
@@ -287,6 +292,7 @@ class FileRow(QFrame):
         name = os.path.basename(path)
         lay.addWidget(ExtTile(name, 38), 0, Qt.AlignmentFlag.AlignVCenter)
         nm = ElidedLabel(name)
+        nm.setTextFormat(Qt.TextFormat.PlainText)      # untrusted filename: plain text
         nm.setStyleSheet("font-size: 14px; font-weight: 500;")
         lay.addWidget(nm, 1)
         sz = label(human_size(size), "muted")
@@ -443,6 +449,7 @@ class JobCard(QFrame):
         top.addWidget(self.badge)
         col = vbox(spacing=1)
         self.title = ElidedLabel(job.title)
+        self.title.setTextFormat(Qt.TextFormat.PlainText)
         self.sub = label("", "caption")
         col.addWidget(self.title)
         col.addWidget(self.sub)
@@ -463,6 +470,7 @@ class JobCard(QFrame):
         # live stats row: step text | speed | ETA
         stats = hbox(spacing=12)
         self.step = label("", "caption")
+        self.step.setTextFormat(Qt.TextFormat.PlainText)   # can carry an error message
         stats.addWidget(self.step, 1)
         self.speed_lb = label("", "caption")
         self.speed_lb.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -569,6 +577,8 @@ class JobCard(QFrame):
 class UploadPage(Page):
     key = "upload"
     MAX_ROWS = 60                      # rows drawn in the list (every file is still sent)
+    BIG_DROP = 2000                    # above this, batches run in CHUNK-sized slices
+    CHUNK = 500                        # …so the event loop gets a breath between them
     overline_key = "nav.transfer"
     title_key = "up.title"
     subtitle_key = "up.subtitle"
@@ -576,6 +586,8 @@ class UploadPage(Page):
     def __init__(self, ctx) -> None:
         super().__init__(ctx)
         self._scans: list[FolderScanThread] = []   # folders being read in the background
+        self._zip: Optional[ZipThread] = None            # smart-ZIP packaging in the background
+        self._sel_lock = threading.RLock()               # guards the 20-item admission
         self.files: list[str] = []
         self._sizes: dict[str, int] = {}
         self.jobs: list[UploadJob] = []
@@ -592,8 +604,10 @@ class UploadPage(Page):
         self._tick = QTimer(self)
         self._tick.setInterval(500)          # snappy: elapsed / ETA / scheduled pumps
         self._tick.timeout.connect(self._on_tick)
+        theme.changed.connect(self._refresh_limit)
         self._refresh_compose()
         self._restore_queue()                # bring back last session's transfers
+        ziputil.sweep_stale(keep=tuple(f for j in self.jobs for f in j.files))
         HUB.attach(self)                     # Queue page observes these jobs
 
     # ------------------------------------------------------------- compose
@@ -621,6 +635,9 @@ class UploadPage(Page):
         self.clear_btn.clicked.connect(self.clear_files)
         head.addWidget(self.clear_btn)
         fl.addLayout(head)
+        self.limit_label = label("", "caption", wrap=True)      # "Files selected: 12 / 20"
+        self.limit_label.setObjectName("limit_label")
+        fl.addWidget(self.limit_label)
         self.capacity = CapacityBar()
         fl.addWidget(self.capacity)
         self.meter_text = label("", "caption")
@@ -631,6 +648,26 @@ class UploadPage(Page):
         self.meter = QProgressBar()            # kept for compatibility; the capacity bar replaces it
         self.meter.setRange(0, 1000)
         self.meter.hide()
+        # ZIP packaging progress (hidden unless a smart ZIP is being built)
+        self.pack_row = QFrame()
+        self.pack_row.setObjectName("card")
+        pk = vbox(self.pack_row, (26, 16, 26, 16), 8)
+        prow = hbox(spacing=10)
+        self.pack_label = label("", "h2")
+        prow.addWidget(self.pack_label, 1)
+        self.pack_cancel = Button("Cancel", "ghost", "", "sm")
+        self.pack_cancel.clicked.connect(self._cancel_zip)
+        prow.addWidget(self.pack_cancel)
+        pk.addLayout(prow)
+        self.pack_bar = QProgressBar()
+        self.pack_bar.setRange(0, 1000)
+        self.pack_bar.setTextVisible(False)
+        self.pack_bar.setFixedHeight(6)
+        pk.addWidget(self.pack_bar)
+        self.pack_file = label("", "caption")
+        pk.addWidget(self.pack_file)
+        self.pack_row.hide()
+        left.addWidget(self.pack_row)
         left.addWidget(self.files_card)
         left.addStretch(1)
         row.addLayout(left, 7)
@@ -760,11 +797,15 @@ class UploadPage(Page):
 
     # ============================================================ file logic
     def browse(self) -> None:
+        if not self._can_add():
+            return
         paths, _ = QFileDialog.getOpenFileNames(self, tr("up.choose_files"))
         if paths:
             self.add_paths(paths)
 
     def browse_folder(self) -> None:
+        if not self._can_add():
+            return
         folder = QFileDialog.getExistingDirectory(self, tr("up.choose_folder"))
         if folder:
             self.add_paths([folder])
@@ -773,19 +814,73 @@ class UploadPage(Page):
         """Add files; any folder is opened and every file inside it is added (no zipping)."""
         self._add_batch(paths)
 
-    def _add_batch(self, paths: list[str], source: str = "") -> int:
-        """Add files to the transfer. Only the total size is limited, never the file count."""
-        before = len(self.files)
+    def _slots_left(self) -> int:
+        return max(0, limits.MAX_FILES_PER_TRANSFER - len(self.files))
+
+    def _busy_packaging(self) -> bool:
+        return self._zip is not None
+
+    def _can_add(self) -> bool:
+        """UI-level guard (the real enforcement is in ``_commit`` and the engine)."""
+        if self._busy_packaging():
+            self.ctx.toast("A ZIP archive is being created — please wait.", "info")
+            return False
+        if self._slots_left() <= 0:
+            self.ctx.toast(f"This transfer already holds {limits.MAX_FILES_PER_TRANSFER} items. "
+                           "Start it first, or remove an item.", "warning")
+            return False
+        return True
+
+    def _add_batch(self, paths: list[str], source: str = "", trusted: bool = False) -> int:
+        """Add files to the transfer (max ``MAX_FILES_PER_TRANSFER`` items).
+
+        Pipeline: folder expansion -> ``filesafety.screen_batch`` (links, sensitive
+        names; ``trusted`` skips the sensitive prompt only) -> admission against the
+        20-item limit.  An overflow is offered as one ZIP.  Returns the number added
+        synchronously (0 when a folder scan / ZIP is still running).
+        """
+        if self._closing or sip.isdeleted(self):
+            return 0
         skipped = {"unreadable": 0, "empty": 0, "big": 0}
+        cands: list[str] = []
+        sizes: dict[str, int] = {}
+        flag_set: set[str] = set()
+        paths = list(paths)
+        if len(paths) > self.BIG_DROP:          # huge drop: yield between chunks
+            for i in range(0, len(paths), self.CHUNK):
+                self._collect(paths[i:i + self.CHUNK], skipped, trusted, cands, sizes, flag_set)
+                QApplication.processEvents()
+        else:
+            self._collect(paths, skipped, trusted, cands, sizes, flag_set)
+        ctx = {"sizes": sizes, "flag_set": flag_set, "skipped": skipped, "source": source}
+        if not cands:
+            self._report_skips(ctx)
+            self._refresh_compose()
+            return 0
+        return self._admit(cands, ctx)
+
+    def _collect(self, paths: list[str], skipped: dict, trusted: bool, cands: list[str],
+                 sizes: dict[str, int], flag_set: set[str]) -> None:
+        """Cheap per-file checks for one bounded chunk; no content is read here."""
+        files: list[str] = []
         for p in paths:
-            p = os.path.abspath(p)
-            if os.path.isdir(p):
-                self._scan_folder(p)
+            ap = os.path.abspath(p)
+            if os.path.isdir(ap):
+                self._scan_folder(ap)           # folders expand in the background
+            else:
+                files.append(ap)
+        if trusted:
+            allowed = files
+        else:
+            allowed, flagged = screen_batch(files, "")
+            skipped["unreadable"] += len(files) - len(allowed)   # SKIP: links, unreadable
+            flag_set.update(s.rsplit(" — ", 1)[0] for s in flagged)
+        seen = set(cands)
+        for p in allowed:
+            if p in self._sizes or p in seen:
                 continue
             if not os.path.isfile(p) or not os.access(p, os.R_OK):
                 skipped["unreadable"] += 1
-                continue
-            if p in self._sizes:
                 continue
             try:
                 size = os.path.getsize(p)
@@ -795,66 +890,329 @@ class UploadPage(Page):
             if size == 0:
                 skipped["empty"] += 1
                 continue
-            if sum(self._sizes.values()) + size > MAX_BYTES:
-                skipped["big"] += 1
-                continue
-            self.files.append(p)
-            self._sizes[p] = size
-        added = len(self.files) - before
-        if source and added:
-            self.ctx.toast(tr("up.added_from", n=added, name=source), "success")
+            seen.add(p)
+            cands.append(p)
+            sizes[p] = size
+
+    def _report_skips(self, ctx: dict) -> None:
+        skipped = ctx["skipped"]
         if skipped["big"]:
             self.ctx.toast(tr("up.over_size", n=skipped["big"]), "error")
         if skipped["unreadable"]:
             self.ctx.toast(tr("up.unreadable", n=skipped["unreadable"]), "error")
+
+    # ---- admission: the 20-item limit -------------------------------------
+    def _admit(self, paths: list[str], ctx: dict) -> int:
+        with self._sel_lock:
+            plan = limits.plan_admission(self.files, paths)
+        decision = "add"
+        if plan.overflow:
+            decision = self._confirm_overflow(paths, plan)
+        if decision == "zip":
+            self._start_zip(paths, ctx)
+            return 0
+        if decision != "add":
+            self._report_skips(ctx)
+            self._refresh_compose()
+            return 0
+        return self._commit(paths, ctx)
+
+    def _commit(self, paths: list[str], ctx: dict) -> int:
+        """The single place that appends to the selection.  Re-plans under the lock, so
+        concurrent callbacks can never push the list past the limit."""
+        sizes, flag_set, skipped = ctx["sizes"], ctx["flag_set"], ctx["skipped"]
+        added = sensitive = over = 0
+        with self._sel_lock:
+            plan = limits.plan_admission(self.files, paths)
+            total = sum(self._sizes.values())
+            for p in plan.accepted:
+                size = sizes.get(p) or self._file_size(p)
+                if size <= 0:
+                    skipped["unreadable"] += 1
+                    continue
+                if total + size > MAX_BYTES:
+                    skipped["big"] += 1
+                    continue
+                self.files.append(p)
+                self._sizes[p] = size
+                total += size
+                added += 1
+                sensitive += p in flag_set
+            over = len(plan.overflow)
+        if ctx.get("source") and added:
+            self.ctx.toast(tr("up.added_from", n=added, name=ctx["source"]), "success")
+        if sensitive:
+            self.ctx.toast(f"{sensitive} file(s) look sensitive — double-check before "
+                           "sending", "warning")
+        if over:
+            self.ctx.toast(f"Limit of {limits.MAX_FILES_PER_TRANSFER} items reached — "
+                           f"{over} file(s) were not added.", "warning")
+        self._report_skips(ctx)
         self._refresh_compose()
         return added
+
+    @staticmethod
+    def _file_size(path: str) -> int:
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+
+    def _confirm_overflow(self, paths: list[str], plan) -> str:
+        """Ask what to do when a batch would exceed the 20-item limit.
+
+        Returns ``"zip"`` (package the files into one archive) or ``"cancel"``;
+        ``"add"`` keeps only what fits.  Tests override this to simulate the choice.
+        """
+        n = len(paths)
+        can_zip = n >= 1 and len(self.files) + 1 <= limits.MAX_FILES_PER_TRANSFER
+        try:
+            from ..dialogs import FramelessDialog
+            d = FramelessDialog(self.window(), 480, (24, 22, 24, 20))
+            d.body.addWidget(label("Too many files for one transfer", "h2"))
+            d.body.addSpacing(4)
+            if can_zip:
+                d.body.addWidget(label(
+                    f"You selected {n} files. Transfer Now supports a maximum of "
+                    f"{limits.MAX_FILES_PER_TRANSFER} upload items per transfer. "
+                    "Your files will be combined into one ZIP archive.", "muted", wrap=True))
+            else:
+                d.body.addWidget(label(
+                    f"This transfer already holds {len(self.files)} of {limits.MAX_FILES_PER_TRANSFER} "
+                    "items, so there is no room for a ZIP archive. Start a separate transfer, or "
+                    "remove items from the current selection first.", "muted", wrap=True))
+            d.body.addSpacing(10)
+            row = hbox(spacing=10)
+            row.addStretch(1)
+            result = {"v": "cancel"}
+            cancel = Button("Cancel" if can_zip else "Close", "")
+            cancel.clicked.connect(d.reject)
+            row.addWidget(cancel)
+            if can_zip:
+                go = Button("Create ZIP and Upload", "primary")
+
+                def pick() -> None:
+                    result["v"] = "zip"
+                    d.accept()
+                go.clicked.connect(pick)
+                go.setDefault(True)
+                row.addWidget(go)
+            d.body.addLayout(row)
+            d.exec()
+            return result["v"]
+        except Exception:                   # noqa: BLE001
+            return "cancel"
+
+    # ---- smart ZIP ---------------------------------------------------------
+    def _start_zip(self, paths: list[str], ctx: dict) -> None:
+        if self._zip is not None or not paths:
+            return
+        th = ZipThread(paths, self)
+        self._zip = th
+        self._zip_n = len(paths)
+        self.pack_label.setText(f"Creating ZIP archive ({len(paths)} files)…")
+        self.pack_bar.setValue(0)
+        self.pack_file.setText("")
+        self.pack_cancel.setEnabled(True)
+        self.pack_row.show()
+        th.progress.connect(self._zip_progress)
+        th.done.connect(lambda res, t=th: self._zip_done(t, res))
+        th.failed.connect(lambda m, t=th: self._zip_failed(t, m))
+        th.cancelled.connect(lambda t=th: self._zip_cancelled(t))
+        th.start()
+        self._refresh_compose()
+
+    def _cancel_zip(self) -> None:
+        if self._zip is not None:
+            self.pack_cancel.setEnabled(False)
+            self._zip.stop()
+
+    def _zip_progress(self, done: int, total: int, name: str) -> None:
+        if self._closing or sip.isdeleted(self):
+            return
+        self.pack_bar.setValue(int(1000 * done / total) if total else 0)
+        self.pack_file.setText(name)
+
+    def _zip_finish(self, th: ZipThread) -> None:
+        if self._zip is th:
+            self._zip = None
+        try:
+            th.deleteLater()
+        except RuntimeError:
+            pass
+        if not self._closing and not sip.isdeleted(self):
+            self.pack_row.hide()
+
+    def _zip_done(self, th: ZipThread, res) -> None:
+        self._zip_finish(th)
+        if self._closing or sip.isdeleted(self):
+            ziputil.cleanup_archive(res.path)
+            return
+        with self._sel_lock:
+            fits = len(self.files) + 1 <= limits.MAX_FILES_PER_TRANSFER
+            if fits and res.size <= MAX_BYTES - sum(self._sizes.values()):
+                self.files.append(res.path)
+                self._sizes[res.path] = res.size
+                ok = True
+            else:
+                ok = False
+        if not ok:
+            ziputil.cleanup_archive(res.path)
+            self.ctx.toast("The ZIP archive does not fit in this transfer (item count or size limit).",
+                           "error")
+            self._refresh_compose()
+            return
+        self.ctx.toast(f"{len(res.entries)} files were packaged into {os.path.basename(res.path)}.",
+                       "success")
+        self._refresh_compose()
+        if self.go.isEnabled():
+            self.start()                    # "Create ZIP and Upload"
+
+    def _zip_failed(self, th: ZipThread, msg: str) -> None:
+        self._zip_finish(th)
+        if not self._closing and not sip.isdeleted(self):
+            self.ctx.toast(msg or "The ZIP archive could not be created.", "error")
+            self._refresh_compose()
+
+    def _zip_cancelled(self, th: ZipThread) -> None:
+        self._zip_finish(th)
+        if not self._closing and not sip.isdeleted(self):
+            self.ctx.toast("ZIP creation cancelled — no files were changed.", "info")
+            self._refresh_compose()
 
     def _scan_folder(self, folder: str) -> None:
         name = os.path.basename(os.path.normpath(folder)) or folder
         t = FolderScanThread(folder, self)
-        t.done.connect(lambda f, files, th=t, nm=name: self._scan_done(th, nm, files))
+        t.progress.connect(lambda f, n, th=t: self._scan_progress(th, n))
+        t.done.connect(lambda f, files, flagged, skipped, th=t, nm=name:
+                       self._scan_done(th, nm, f, files, flagged, skipped))
         t.failed.connect(lambda f, m, th=t, nm=name: self._scan_failed(th, nm))
         self._scans.append(t)
         self.ctx.toast(tr("up.reading_folder", name=name), "info")
         t.start()
         self._refresh_compose()
 
-    def _scan_finish(self, th: FolderScanThread) -> None:
-        if th in self._scans:
-            self._scans.remove(th)
-        try:
-            th.deleteLater()
-        except RuntimeError:
-            pass
-
-    def _scan_done(self, th: FolderScanThread, name: str, files: list) -> None:
-        self._scan_finish(th)
-        if self._closing:
+    def _scan_progress(self, th: FolderScanThread, n: int) -> None:
+        """Throttled progress from the scan thread — cheap go-button update only."""
+        if self._closing or sip.isdeleted(self):
             return
-        if not files:
+        if self._scans:
+            self.go.setText(f"{tr('btn.preparing')} ({n})")
+
+    def _scan_finish(self, th: FolderScanThread) -> None:
+        if th is not None and th in self._scans:
+            self._scans.remove(th)
+        if th is not None:
+            try:
+                th.deleteLater()
+            except RuntimeError:
+                pass
+        if not self._closing and not sip.isdeleted(self):
+            self._refresh_compose()         # never leave “Get link” stuck on “Preparing…”
+
+    def _scan_done(self, th: Optional[FolderScanThread], name: str, folder: str,
+                   files: list, flagged: list, skipped: int = 0) -> None:
+        self._scan_finish(th)
+        if self._closing or sip.isdeleted(self):   # shutdown may have raced the signal
+            return
+        if not files and not flagged:
             self.ctx.toast(tr("up.folder_empty", name=name), "error")
             self._refresh_compose()
             return
-        self._add_batch(files, source=name)
+        if files:
+            self._add_batch(files, source=name)
+        if flagged and self._confirm_flagged(folder or name, flagged):
+            self._add_batch(self._flagged_paths(flagged), source=name, trusted=True)
 
     def _scan_failed(self, th: FolderScanThread, name: str) -> None:
         self._scan_finish(th)
+        if self._closing or sip.isdeleted(self):
+            return
         self.ctx.toast(tr("up.folder_failed", name=name), "error")
         self._refresh_compose()
+
+    @staticmethod
+    def _flagged_paths(flagged: list[str]) -> list[str]:
+        """``"path — reason"`` strings → the paths (reason separator: em dash)."""
+        return [s.rsplit(" — ", 1)[0] for s in flagged if s]
+
+    def _confirm_flagged(self, folder: str, flagged: list[str]) -> bool:
+        """Non-blocking prompt about files the scanner flagged as sensitive.
+
+        The allowed files are already in the list; flagged ones wait for an
+        explicit decision.  The dialog stays non-modal — the compose area keeps
+        working either way.  Returns True only when the flagged files were
+        added right away; the real dialog adds them from its own button, so it
+        always returns False here (tests override this method to simulate the
+        user's choice).
+        """
+        try:
+            from ..dialogs import FramelessDialog
+            d = FramelessDialog(self.window(), 500, (24, 22, 24, 20))
+            d.setModal(False)               # a prompt, not a roadblock
+            self._flag_dialog = d
+            d.body.addWidget(label(f"Skipped {len(flagged)} sensitive "
+                                   f"file{'s' if len(flagged) != 1 else ''} from {folder}",
+                                   "h2", wrap=True))
+            d.body.addSpacing(2)
+            d.body.addWidget(label("These names can hide credentials or private data. "
+                                   "Send them only if you really mean to.", "muted",
+                                   wrap=True))
+            d.body.addSpacing(8)
+            list_box = QFrame()
+            list_box.setObjectName("inner")
+            ll = vbox(list_box, (12, 10, 12, 10), 6)
+            for line in flagged[:20]:       # plain-text paths with their reason
+                ll.addWidget(label(line, "caption", wrap=True))
+            if len(flagged) > 20:
+                ll.addWidget(label(tr("up.more_files", n=len(flagged) - 20), "muted"))
+            area = QScrollArea()
+            area.setWidgetResizable(True)
+            area.setFrameShape(QFrame.Shape.NoFrame)
+            area.setWidget(list_box)
+            area.setMaximumHeight(240)
+            enable_smooth_scroll(area)
+            d.body.addWidget(area, 1)
+            d.body.addSpacing(10)
+            row = hbox(spacing=10)
+            row.addStretch(1)
+            keep = Button("Keep them out", "")
+            keep.setDefault(True)
+            keep.clicked.connect(d.reject)
+
+            def add_anyway() -> None:
+                d.accept()
+                self._add_batch(self._flagged_paths(flagged), source=folder, trusted=True)
+
+            add = Button("Add them anyway", "primary")
+            add.clicked.connect(add_anyway)
+            row.addWidget(keep)
+            row.addWidget(add)
+            d.body.addLayout(row)
+            keep.setFocus()
+            d.show()                        # non-blocking: no exec()
+            return False
+        except Exception:                   # noqa: BLE001 — never lose files over a dialog
+            return False
 
     def _cleanup_tmp(self) -> None:
         """Kept for the callers that tidy up after a transfer; nothing is written to disk now."""
 
     def remove_file(self, path: str) -> None:
-        if path in self._sizes:
-            self.files.remove(path)
-            del self._sizes[path]
-            self._refresh_compose()
+        with self._sel_lock:
+            if path in self._sizes:
+                self.files.remove(path)
+                del self._sizes[path]
+                ziputil.cleanup_archive(path)          # no-op for anything but our own archives
+        self._refresh_compose()
 
     def clear_files(self) -> None:
-        self.files.clear()
-        self._sizes.clear()
+        with self._sel_lock:
+            gone = list(self.files)
+            self.files.clear()
+            self._sizes.clear()
+        for p in gone:
+            ziputil.cleanup_archive(p)
         self._cleanup_tmp()
         self._refresh_compose()
 
@@ -872,6 +1230,28 @@ class UploadPage(Page):
             except RuntimeError:                 # row was rebuilt/deleted meanwhile
                 pass
         QTimer.singleShot(delay_ms + 60, go)
+
+    def _refresh_limit(self) -> None:
+        """'Files selected: 12 / 20' + remaining slots; locks the drop zone when full."""
+        if sip.isdeleted(self):
+            return
+        n, cap = len(self.files), limits.MAX_FILES_PER_TRANSFER
+        left = cap - n
+        if left <= 0:
+            txt = (f"Files selected: {n} / {cap} — limit reached. Start this transfer, remove an "
+                   "item, or use a separate transfer to add more.")
+            color = theme.pal["warning"]
+        else:
+            txt = f"Files selected: {n} / {cap} · {left} slot{'s' if left != 1 else ''} left"
+            color = theme.pal["muted"]
+        self.limit_label.setText(txt)
+        self.limit_label.setStyleSheet(f"color: {color};")
+        self.limit_label.setVisible(n > 0)
+        full = left <= 0 or self._zip is not None
+        self.drop.setEnabled(not full)
+        self.drop.setToolTip("" if not full else
+                             ("A ZIP archive is being created." if self._zip is not None else
+                              f"Limit of {cap} items reached."))
 
     def _files_title(self) -> str:
         n = len(self.files)
@@ -905,10 +1285,12 @@ class UploadPage(Page):
         self.meter.setValue(int(1000 * total / MAX_BYTES) if total else 0)
         self.capacity.set_data([self._sizes[p] for p in self.files], MAX_BYTES)
         self.meter_text.setText(tr("up.size_used", used=human_size(total)))
-        self.sum_files.setText(str(n) if n else "—")
+        self.sum_files.setText(f"{n} / {limits.MAX_FILES_PER_TRANSFER}" if n else "—")
+        self._refresh_limit()
         self.sum_size.setText(human_size(total) if n else "—")
-        self.go.setEnabled(n > 0 and not self._scans)
-        self.go.setText(tr("btn.preparing") if self._scans else tr("up.get_link"))
+        busy = bool(self._scans or self._zip)
+        self.go.setEnabled(n > 0 and not busy)
+        self.go.setText(tr("btn.preparing") if busy else tr("up.get_link"))
         self.go_hint.setText(tr("up.go_eta", size=human_size(total)))
         self.go_hint.setVisible(n > 0)
         self._go_fx.setEnabled(self.go.isEnabled())
@@ -1038,13 +1420,22 @@ class UploadPage(Page):
                 job = UploadJob(files, sizes, e.get("email", ""),
                                 scheduled_at=sched_mono if state == "scheduled" else 0.0)
                 job.state = state
-                job.link = e.get("link", "")
                 job.error = e.get("error", "")
                 job.elapsed = float(e.get("elapsed") or 0.0)
                 job.created_at = float(e.get("created_at") or job.created_at)
                 job.finished_at = float(e.get("finished_at") or 0.0)
+                # restored links are re-validated before they can ever be
+                # opened/copied/QR-shown (A4-03/L5): a tampered or corrupt
+                # cache entry must not become a tappable URL
+                from core.downloader import parse_transfer_id
+                if not parse_transfer_id(e.get("link") or ""):
+                    job.link = ""
+                    if state == "done":
+                        job.state, job.error = "failed", "Invalid link"
+                else:
+                    job.link = e.get("link", "")
                 if state == "done" and not job.link:
-                    job.state, job.error = "failed", "Link unavailable"
+                    job.state, job.error = "failed", job.error or "Link unavailable"
                 if state in ("queued", "scheduled"):
                     missing = [p for p in files if not os.path.isfile(p)]
                     if missing:
@@ -1081,13 +1472,18 @@ class UploadPage(Page):
 
     def start(self) -> None:
         """Turn the selected files into a queued (or scheduled) transfer."""
-        if not self.files or self._scans:
+        if not self.files or self._scans or self._zip:
             return
         if self.mode.value() == "fixed":
             self._on_email_edit()
             if not self._validate_email():
                 self.ctx.toast("Enter a valid sender email first", "error")
                 return
+        try:
+            limits.check_item_count(self.files)
+        except ValueError as exc:
+            self.ctx.toast(str(exc), "error")
+            return
         missing = [p for p in self.files if not os.path.isfile(p)]
         if missing:
             self.ctx.toast(f"File no longer exists: {os.path.basename(missing[0])}", "error")
@@ -1139,8 +1535,7 @@ class UploadPage(Page):
         if host is None:
             return
         y = self.jobs_card.mapTo(host, QPoint(0, 0)).y()
-        sb = self.verticalScrollBar()
-        sb.setValue(max(0, min(sb.maximum(), y - 8)))
+        enable_smooth_scroll(self).scroll_to(max(0, y - 8))
 
     def _pump(self) -> None:
         running = sum(1 for j in self.jobs if j.state == "running")
@@ -1215,6 +1610,8 @@ class UploadPage(Page):
         job.data = data
         job.link = data.get("link", "")
         job.finished_at = time.time()
+        for f in job.files:                    # generated ZIPs are not needed once the link exists
+            ziputil.cleanup_archive(f)
         job.elapsed = data.get("elapsed_s") or (time.monotonic() - job.started)
         self.ctx.add_history({
             "kind": "upload", "files": data.get("files", []),
@@ -1346,6 +1743,8 @@ class UploadPage(Page):
             self._orphans.append(job.thread)
         if job in self.jobs:
             self.jobs.remove(job)
+        for f in job.files:                    # retention: a kept ZIP goes away with its job
+            ziputil.cleanup_archive(f)
         card = self.cards.pop(job.id, None)
         if card is not None:
             self.jobs_lay.removeWidget(card)
@@ -1370,20 +1769,8 @@ class UploadPage(Page):
         j = self._find(job_id)
         if j is None or not j.link:
             return
-        from ..dialogs import FramelessDialog
-        d = FramelessDialog(self.window(), 320, (24, 22, 24, 20))
-        d.body.addWidget(label("Scan to open the link", "h2"), 0, Qt.AlignmentFlag.AlignHCenter)
-        qr = QrWidget(220)
-        if qr.set_text(j.link):
-            d.body.addWidget(qr, 0, Qt.AlignmentFlag.AlignHCenter)
-        else:
-            d.body.addWidget(label("Install the optional “qrcode” package to show QR codes.",
-                                   "muted", wrap=True))
-        d.body.addSpacing(8)
-        close = Button(tr("dlg.close"), "primary")
-        close.clicked.connect(d.accept)
-        d.body.addWidget(close)
-        d.exec()
+        from ..qrdialog import QrExportDialog
+        QrExportDialog(self.window(), j.link, self.ctx.toast).exec()
 
     # ----------------------------------------------------------------- status
     def _update_jobs_header(self) -> None:
@@ -1461,6 +1848,11 @@ class UploadPage(Page):
         for z in list(self._scans):
             z.stop()
             z.wait(15000)
+        self._scans.clear()                  # joined scans leave no dangling callbacks
+        if self._zip is not None:
+            self._zip.stop()
+            self._zip.wait(15000)
+        self._zip = None
         threads = [j.thread for j in self.jobs if j.thread is not None] + list(self._orphans)
         for j in self.jobs:
             if j.thread is not None:

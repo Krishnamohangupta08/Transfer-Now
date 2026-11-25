@@ -1,5 +1,16 @@
-PyQt6>=6.6
-selenium>=4.20
+# Runtime dependencies only — what the app needs to *run* (run.sh / run.bat install this).
+# Build tools live in requirements-build.txt; dev/CI tools in requirements-dev.txt.
+# tests/test_packaging.py asserts every third-party import in core/ + ui/ + main.py
+# maps to one of the packages below (or a documented optional module).
+#
+# PyQt6            ui/** + main.py                    — GUI toolkit
+PyQt6>=6.6          # verified: resolves to 6.12.x; UI works headless (QT_QPA_PLATFORM=offscreen)
+# selenium         core/engine.py                     — drives Chrome/Edge for uploads;
+selenium>=4.20      #   selenium-manager auto-fetches the matching chromedriver
+# requests         core/downloader.py, core/linkcheck.py — link lookup, resumable downloads, health checks
 requests>=2.31
-qrcode>=7.4        # optional: QR code on the "link ready" screen
-psutil>=5.9
+urllib3>=2.0        # core/netpolicy.py — pinned-connection transport (M3 IP pinning)
+# psutil           core/procs.py                      — reliable browser process cleanup
+psutil>=5.9         #   (degrades gracefully to OS commands if missing)
+# qrcode           ui/widgets.py                      — QR code on the "link ready" screen;
+qrcode>=7.4         #   optional by code (app falls back to no QR), kept here so the feature works

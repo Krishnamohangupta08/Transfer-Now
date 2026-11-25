@@ -26,6 +26,7 @@ from .. import icons
 from ..dialogs import confirm
 from ..i18n import i18n, tr
 from ..menus import LineEdit, RoundMenu
+from ..smoothscroll import enable_smooth_scroll
 from ..theme import _mix, theme
 from ..widgets import Badge, Button, Segmented, hbox, label, vbox
 from .base import Page
@@ -341,9 +342,7 @@ class HistoryPage(Page):
         self._check: LinkCheckThread | None = None
         self._pending: set[str] = set()
         self._check_tally = (0, 0)
-        # premium / calm: the page still scrolls (wheel, touch, keys) but never shows a bar
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # same scrollbar + smooth wheel scrolling as every other page (see Page / smoothscroll)
 
         # ---- summary tiles (number + share-of-total meter)
         stats = hbox(spacing=12)
@@ -422,6 +421,7 @@ class HistoryPage(Page):
         # no scroll bars anywhere: the table grows to its content, the page scrolls
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        enable_smooth_scroll(self).attach(self.table.viewport())
         self.table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.table.setMouseTracking(True)
         self.table.verticalHeader().setDefaultSectionSize(ROW_H)

@@ -1,283 +1,178 @@
- 
 <p align="center">
   <img src="docs/banner.png" alt="Transfer Now — Move Files. Faster. Easier." width="100%">
 </p>
 
 <p align="center">
-  <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat&logo=python&logoColor=white">
-  <img alt="PyQt6" src="https://img.shields.io/badge/Framework-PyQt6-41CD52?style=flat&logo=qt&logoColor=white">
-  <img alt="Cross Platform" src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-8A8A8A?style=flat">
-  <img alt="Version" src="https://img.shields.io/badge/Version-1.0.0.0-2A3FFF?style=flat">
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white">
+  <img alt="PyQt6" src="https://img.shields.io/badge/UI-PyQt6-41CD52?logo=qt&logoColor=white">
+  <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.0.1-2A3FFF">
 </p>
 
 <p align="center">
-  <strong>A modern desktop experience for effortless file transfers.</strong>
-  <br>
-  Send, receive, manage and track your files through TransferNow, directly from your desktop.
-</p>
-
-<p align="center">
-  <strong>5 GB per transfer</strong> · <strong>Free</strong> · <strong>No account required</strong> · <strong>Unlimited files per transfer</strong>
+  A fast desktop app for sharing files with <b>TransferNow</b> — free, no account, up to <b>5 GB</b> per transfer
+  and up to <b>20 items per transfer</b> (larger selections are zipped for you).
 </p>
 
 ---
 
-## Overview
+## Screenshots
 
-**Transfer Now** brings the simplicity of TransferNow into a dedicated desktop application. Built with Python and PyQt6, it combines a streamlined interface, powerful transfer management, resumable downloads and an integrated transfer history into one cohesive experience.
-
-Designed to make file sharing feel effortless, without constantly switching between browser tabs.
-
-<p align="center">
-  <img src="docs/screenshots/Final.png" alt="Transfer Now Dashboard" width="100%">
-</p>
-
----
+<table>
+  <tr>
+    <td align="center" width="50%"><b>Dark</b></td>
+    <td align="center" width="50%"><b>Light</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/dashboard-dark.png" alt="Dashboard, dark theme"></td>
+    <td><img src="docs/screenshots/dashboard-light.png" alt="Dashboard, light theme"></td>
+  </tr>
+</table>
 
 ## Features
 
-### ↗ Send files
+**Send**
+- 🔗 **Share link in one click** — up to 5 GB per transfer, free, no account; links stay live for 7 days.
+- 📁 **Folders just work** — choose or drop a folder and every file inside (subfolders included) is added for you. A transfer holds up to 20 items; if you select more, Transfer Now offers to combine them into one ZIP.
+- 🖱️ **Drag & drop anywhere** in the window, or use **Browse files** / **Add folder**.
+- 🗂️ **Queue** — many transfers at once, parallel uploads (1–4), reorder, retry, cancel, copy all links.
+- 📈 **Live progress** — real percentage, speed graph and ETA on every transfer.
+- ⏰ **Scheduled uploads** with automatic retry for failed transfers.
+- ✉️ **Sender address** — a fresh random one per transfer, or your own.
 
-Everything you need to send files without unnecessary friction.
+**Receive**
+- ⬇️ **Download from a link** — paste a TransferNow link, preview the files, choose a folder and save.
+  Downloads can be paused and resume after a dropped connection.
 
-- **Instant sharing** — Generate shareable links for transfers up to 5 GB, free of charge and without an account.
-- **Folder support** — Add entire folders, including nested directories, without manually selecting individual files or creating ZIP archives.
-- **Drag & drop** — Drop files or folders anywhere inside the application.
-- **Flexible file selection** — Browse files or add folders directly.
-- **Transfer queue** — Manage multiple transfers simultaneously, reorder tasks, retry failed uploads, cancel transfers and copy all generated links.
-- **Parallel uploads** — Upload up to 4 transfers simultaneously.
-- **Live monitoring** — Track upload progress, transfer speed and estimated completion time.
-- **Scheduled transfers** — Schedule uploads and automatically retry failed transfers.
-- **Sender customization** — Use a randomly generated sender address or provide your own.
+**Keep track**
+- 🕘 **History** with search, filters and CSV export.
+- 🩺 **Link health check** — one click verifies which saved links are still active, plus QR codes for any link.
+- 📊 **Dashboard** with a live speed readout, stats cards, weekly activity and link health.
 
-### ↙ Receive files
+**Desktop comfort**
+- 🔔 System tray, desktop notifications and a clipboard watcher that offers to open any TransferNow link you copy.
+- 🎨 Light and dark themes (*Graphite*, *Graphite Black*, *Graphite Blue*, *Porcelain*, *Porcelain Warm*, or follow the system), 7 accent colours.
+- 🌍 8 languages: English, हिन्दी, Español, Français, Deutsch, Português (BR), 日本語, 中文.
+- ⌨️ Command palette (`Ctrl+K`) and keyboard shortcuts for everything (`F1` lists them).
 
-Download shared files without opening your browser.
-
-- **Link-based downloads** — Paste a TransferNow link and retrieve its contents.
-- **File preview** — Review available files before downloading.
-- **Custom destination** — Choose where downloaded files should be saved.
-- **Pause & resume** — Continue downloads after interruptions whenever supported.
-
-### ◷ Transfer history & monitoring
-
-Keep every transfer organized and accessible.
-
-- **Transfer history** — Track past uploads and downloads.
-- **Search & filters** — Quickly find previous transfers.
-- **CSV export** — Export transfer history for external use.
-- **Link health monitoring** — Check whether saved transfer links are still accessible.
-- **QR codes** — Generate QR codes for sharing transfer links.
-- **Activity dashboard** — View transfer statistics, weekly activity and link health.
-- **Live speed monitoring** — Keep an eye on transfer activity in real time.
-
-### ◈ Designed for desktop
-
-A desktop experience built around convenience and customization.
-
-- **System tray integration** — Keep the application running in the background.
-- **Desktop notifications** — Receive updates when transfers complete.
-- **Clipboard monitoring** — Detect copied TransferNow links and offer to open them.
-- **Multiple themes** — Graphite, Graphite Black, Graphite Blue, Porcelain, Porcelain Warm and System.
-- **Accent customization** — Choose from 7 accent colors.
-- **Multilingual interface** — English, हिन्दी, Español, Français, Deutsch, Português (BR), 日本語 and 中文.
-- **Command palette** — Quickly access application actions with `Ctrl+K`.
-- **Keyboard shortcuts** — Navigate and control the application efficiently.
-
----
-
-## Installation
+## Getting started
 
 ### Requirements
 
-| Requirement | Details |
-|---|---|
-| Python | 3.10 or newer |
-| Browser | Google Chrome or Microsoft Edge |
-| Operating system | Windows, macOS or Linux |
-| Internet | Required for transfers |
+- **Python 3.10+**
+- **Google Chrome** or **Microsoft Edge** — needed for uploading (the app drives it in the background; Selenium fetches the matching driver itself). Downloading needs nothing but an internet connection.
 
-<caption>Uploading requires Google Chrome or Microsoft Edge because the application automates the browser in the background. Selenium automatically manages the matching browser driver. Downloads require only an internet connection.</caption>
-
-### Get started
-
-Clone the repository:
+### Run
 
 ```bash
-git clone https://github.com/Krishnamohangupta08/Transfer-Now.git
+git clone https://github.com/<your-username>/transfer-now.git
 cd transfer-now
 ```
 
-### Run the application
-
 | Platform | Command |
 |---|---|
-| Windows | Double-click `run.bat` |
-| macOS / Linux | `./run.sh` |
-| Manual | `pip install -r requirements.txt` followed by `python main.py` |
+| **Windows** | double-click `run.bat` |
+| **macOS / Linux** | `./run.sh` |
+| **Manual** | `pip install -r requirements.txt` then `python main.py` |
 
-The first launch automatically creates a private virtual environment and installs the required dependencies.
+The first run creates a private virtual environment and installs the dependencies
+(PyQt6, Selenium, requests, psutil and the optional `qrcode`).
 
-Core dependencies include PyQt6, Selenium, Requests and optional QR-code support.
-
----
-
-## Build a standalone application
-
-Build Transfer Now into a standalone desktop application using PyInstaller.
-
-### Install build dependencies
+### Build a standalone app
 
 ```bash
 pip install -r requirements.txt -r requirements-build.txt
+python build.py              # single file + folder build
+python build.py onefile      # one portable executable
+python build.py onedir       # folder build (starts faster)
 ```
 
-### Build options
+On Windows you can also double-click `build_exe.bat`; on macOS / Linux use `./build_exe.sh`.
+Build on the platform you are targeting — PyInstaller can't cross-compile.
+Settings and history live in `%APPDATA%\TransferNow`, so they survive updates.
 
-```bash
-python build.py
-```
+## Using it
 
-| Build mode | Command | Description |
-|---|---|---|
-| Default | `python build.py` | Builds both single-file and folder-based distributions |
-| One file | `python build.py onefile` | Creates a portable executable |
-| One directory | `python build.py onedir` | Creates a folder-based application that starts faster |
+1. **Add files** — drop files or folders anywhere in the window, or use *Browse files* / *Add folder* on the Upload page.
+2. **Pick a sender** and, if you like, schedule it for later.
+3. Press **Get link** (`Ctrl+Enter`). The transfer moves into the queue and the form is free for the next one.
+4. **Copy, open or scan** the link when it's ready. It also lands in History.
 
-You can also use the platform-specific build scripts:
+A transfer holds up to **20 items** and **5 GB** in total. Select more than 20 files and Transfer Now offers **Create ZIP and Upload**; files over the 5 GB total are skipped and you're told how many.
 
-- Windows: `build_exe.bat`
-- macOS / Linux: `./build_exe.sh`
-
-<caption>Build on the target operating system. PyInstaller does not support cross-compiling applications between operating systems.</caption>
-
-### Application data
-
-Settings and transfer history are stored locally.
-
-| Operating system | Storage location |
-|---|---|
-| Windows | `%APPDATA%\TransferNow` |
-
-Your settings and history remain available across application updates.
-
----
-
-## Usage
-
-### 1. Add files
-
-Drop files or folders directly into the application, or use the file browser and folder selection controls on the Upload page.
-
-### 2. Configure your transfer
-
-Select a sender address and optionally schedule the transfer for a later time.
-
-### 3. Generate your link
-
-Press **Get link** or use the `Ctrl+Enter` shortcut.
-
-Your transfer is automatically added to the queue, allowing you to prepare the next transfer while the previous one is running.
-
-### 4. Share your files
-
-Copy, open or scan the generated link. Completed transfers are also automatically added to your history.
-
-<caption>Each transfer is limited to 5 GB in total. When a selection exceeds the limit, files that do not fit are skipped and the application informs you how many files were excluded.</caption>
-
----
-
-## Keyboard shortcuts
+### Keyboard shortcuts
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+K` | Open command palette |
-| `Ctrl+Enter` | Generate transfer link |
-| `Ctrl+Shift+V` | Paste a link and fetch files |
-| `Ctrl+Shift+C` | Copy the latest transfer link |
+| `Ctrl+K` | Command palette |
+| `Ctrl+Enter` | Get link |
+| `Ctrl+Shift+V` | Paste a link and fetch it |
+| `Ctrl+Shift+C` | Copy the last link |
 | `Ctrl+L` | Check saved links |
-| `Ctrl+B` | Collapse or expand sidebar |
-| `F11` | Toggle fullscreen |
-| `F1` | View all keyboard shortcuts |
+| `Ctrl+B` | Collapse / expand the sidebar |
+| `F11` | Full screen |
+| `F1` | All shortcuts |
 
----
+## Project layout
 
-## Project structure
-
-```text
-transfer-now/
-├── main.py
-├── core/
-│   ├── engine.py          # Upload automation (Selenium)
-│   ├── downloader.py      # Link lookup and resumable downloads
-│   ├── linkcheck.py       # Transfer link health checker
-│   ├── tasks.py           # Background workers
-│   └── store.py           # Settings and history storage
-├── ui/
-│   ├── window, theme, i18n, widgets, tray, dialogs
-│   └── pages/
-│       ├── dashboard
-│       ├── upload
-│       ├── queue
-│       ├── download
-│       ├── history
-│       └── settings
-├── assets/                # Icons, fonts and application assets
-├── docs/                  # README banner and screenshots
-├── tools/                 # Utilities and screenshot renderers
-├── tests/                 # Automated tests
-├── build.py                # PyInstaller build script
-├── run.bat
-├── run.sh
-├── build_exe.bat
-└── build_exe.sh
+```
+main.py                 entry point
+core/engine.py          upload automation (Selenium, Qt-free, unit-testable)
+core/downloader.py      link lookup + resumable download
+core/linkcheck.py       link health checker
+core/tasks.py           background workers (upload, download, folder scan, link check)
+core/procs.py           makes sure no browser process outlives the app
+core/store.py           settings + history (atomic JSON)
+ui/                     window, theme, i18n, widgets, tray, dialogs
+ui/pages/               dashboard, upload, queue, download, history, settings
+assets/                 icons (SVG source in assets/icons/), fonts, app icon
+docs/                   README banner and screenshots
+tools/                  icon export, app-icon maker, screenshot renderers
+tests/                  automated tests
+build.py                PyInstaller build
 ```
 
----
-
-## Regenerate screenshots
-
-The README screenshots can be regenerated using the screenshot rendering utility.
+Regenerate the README screenshots with:
 
 ```bash
 QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=1.6 python tools/readme_shots.py
 ```
 
----
-
-## Testing
-
-### Core tests
+## Tests
 
 ```bash
-python -m unittest tests.test_core
+python -m unittest tests.test_core        # parsing, storage, downloader
+python -m unittest tests.test_ui          # UI flows (needs Chrome for the upload flows)
 ```
 
-Tests parsing, storage and downloader functionality.
+## Security & build notes
 
-### UI tests
+- **Dependency split** — `requirements.txt` is runtime-only; `requirements-build.txt`
+  (PyInstaller + Pillow) and `requirements-dev.txt` (ruff, bandit, pip-audit) are kept
+  separate, so the `run.sh` / `run.bat` launchers never install build or dev tooling.
+- **CI** — `.github/workflows/ci.yml` runs the test suite headless, ruff + bandit, an
+  advisory pip-audit scan, and a PyInstaller packaging job per platform (Linux onedir
+  with a headless smoke run, Windows onefile, macOS onedir). CI proves the build
+  commands run on native runners — the packaged Windows/macOS apps are *not*
+  UX-tested there.
+- **Packaging paths** — the bundle ships the fonts at `assets/fonts/` (Inter + Inter
+  Tight + the OFL license) and the developer photo at `assets/`, matching what the
+  frozen app looks up in `main.py` and `ui/about.py`;
+  `python -m unittest tests.test_packaging` guards this (and boots the frozen app
+  headless when a build is present).
+- **Headless testing** — set `TN_DATA_DIR` to redirect settings/history/sounds into a
+  scratch folder and `QT_QPA_PLATFORM=offscreen` to run without a display; minimal
+  Linux hosts additionally need `libegl1` / `libgl1` for PyQt6 to load.
 
-```bash
-python -m unittest tests.test_ui
-```
+## Good to know
 
-Tests application UI flows. Upload-related tests require Chrome.
-
----
-
-## Important notes
-
-- **Independent project:** Transfer Now is not affiliated with TransferNow.
-- **Upload implementation:** Uploads are performed by automating the public TransferNow website through a hidden browser session. Changes to the website may affect upload functionality.
-- **Website compatibility:** If the Create a link or Get a link element is no longer detected, the application reports the issue. Relevant selectors are maintained in `core/engine.py`.
-- **Link health checks:** Link status detection is best-effort. HTTP 200 is interpreted as active, HTTP 404 or 410 as expired, and other responses as unchecked. TransferNow does not provide a dedicated status API for this implementation.
-- **Progress reporting:** When the website does not expose progress information, Transfer Now uses a smooth progress estimate instead of falsely reporting 100% completion.
-- **Translations:** Static interface text is translated. Certain engine-generated messages may remain in English.
-
----
+- **Not affiliated with TransferNow.** Uploads work by automating the public TransferNow website in a hidden browser, so a change to that site can break them. If "Create a link" or "Get a link" stops being found, the app tells you and the selectors to update are in `core/engine.py`.
+- The **link checker** is best-effort: HTTP 200 → active, 404/410 → expired, anything else → *Unchecked*. TransferNow has no status API.
+- If the site hides its progress bar, the app falls back to a smooth estimate and never shows a fake 100 %.
+- Interface translations cover the static UI text; some engine messages stay in English.
 
 ## Author
 
-**Developed by Krishna Mohan Gupta**
+Developed by **Krishna Mohan Gupta**.
 
 © 2026 Krishna Mohan Gupta. All rights reserved.

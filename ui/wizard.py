@@ -20,6 +20,7 @@ from .dialogs import FramelessDialog
 from .i18n import LANGS, i18n, tr
 from .menus import LineEdit
 from .pages.settings import ThemeCard
+from .iconfx import AnimatedLogo
 from .sounds import sounds
 from .theme import ACCENTS, THEME_LABELS, theme
 from .widgets import (
@@ -123,10 +124,8 @@ class SetupWizard(FramelessDialog):
     def _page_welcome(self) -> QWidget:
         p = QWidget()
         col = vbox(p, (16, 4, 16, 0), 0)
-        logo = label("")
-        logo.setPixmap(icons.logo_pixmap(84, glow=True))
-        logo.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        col.addWidget(logo)
+        logo = AnimatedLogo(84, pad=26, glow=True, breathe=True)
+        col.addWidget(logo, 0, Qt.AlignmentFlag.AlignHCenter)
         col.addSpacing(14)
         self.welcome_title = label(tr("wiz.welcome"), "h1")
         self.welcome_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)

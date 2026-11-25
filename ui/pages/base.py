@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QFrame, QScrollArea, QWidget
 
 from ..ctx import Ctx
 from ..i18n import i18n, tr
+from ..smoothscroll import enable_smooth_scroll
 from ..widgets import hbox, label, vbox
 
 MAX_WIDTH = 1180
@@ -23,6 +24,7 @@ class Page(QScrollArea):
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        enable_smooth_scroll(self)
 
         host = QWidget()
         host.setObjectName("page")

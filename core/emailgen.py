@@ -1,48 +1,30 @@
-"""Random realistic email generator."""
+"""Anonymous sender-address generator (no fabricated human identities).
+
+The "random" sender mode must never invent a plausible person at a real
+provider domain: a made-up gmail/outlook address can collide with somebody's
+real mailbox, and sending files under a fabricated human identity is wrong.
+So ``random_email()`` only produces clearly synthetic local parts at the
+IANA-reserved example domains (RFC 2606 / RFC 6761) — they can never reach a
+real person.  The UI (updated separately) labels this mode "anonymous
+sender — reserved domain, not a real mailbox"; the recommended mode is the
+user's own address ("fixed" sender mode).
+"""
 from __future__ import annotations
 
-import random
+import secrets
 
-FIRST_NAMES = [
-    "alex", "sarah", "maria", "david", "james", "laura", "emily", "michael",
-    "chris", "jenny", "kevin", "nina", "oliver", "paula", "robert", "sophie",
-    "thomas", "victoria", "walter", "anna", "ben", "carla", "daniel", "elena",
-    "felix", "grace", "hannah", "ivan", "julia", "leo", "mona", "nathan",
-]
-LAST_NAMES = [
-    "smith", "johnson", "brown", "miller", "davis", "wilson", "moore", "taylor",
-    "anderson", "thomas", "jackson", "white", "harris", "martin", "thompson",
-    "garcia", "clark", "lewis", "walker", "hall", "young", "king", "wright",
-    "lopez", "hill", "green", "adams", "baker", "ross", "rivera", "campbell",
-]
-DOMAINS = [
-    ("gmail.com", 0.55), ("outlook.com", 0.2), ("yahoo.com", 0.12),
-    ("hotmail.com", 0.08), ("protonmail.com", 0.05),
-]
+# RFC 2606 / IANA special-use domains — reserved, can never deliver to a
+# real mailbox, safe to put into a sender field.
+DOMAINS = ("example.com", "example.org", "example.net")
+
+# Synthetic local-part prefixes — deliberately NOT first/last-name pairs.
+LOCAL_PREFIXES = ("anon", "guest", "sender")
 
 
 def random_email() -> str:
-    """Generate a realistic-looking random email address."""
-    first = random.choice(FIRST_NAMES)
-    last = random.choice(LAST_NAMES)
-    style = random.random()
-    num = str(random.randint(2, 9899))
-    if style < 0.45:
-        local = f"{first}.{last}{num}"
-    elif style < 0.75:
-        local = f"{first}{last}{num}"
-    elif style < 0.9:
-        local = f"{first}{num}"
-    else:
-        local = f"{first}.{last}"
-    r, acc = random.random(), 0.0
-    domain = "gmail.com"
-    for d, w in DOMAINS:
-        acc += w
-        if r <= acc:
-            domain = d
-            break
-    return f"{local}@{domain}"
+    """Generate an anonymous sender address, e.g. ``anon-4271@example.org``."""
+    local = f"{secrets.choice(LOCAL_PREFIXES)}-{secrets.randbelow(9000) + 1000}"
+    return f"{local}@{secrets.choice(DOMAINS)}"
 
 
 if __name__ == "__main__":

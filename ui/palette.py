@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QFrame, QListWidget, QListWidgetItem, QWidget
 
 from .dialogs import FramelessDialog
 from .menus import LineEdit
+from .smoothscroll import enable_smooth_scroll
 from .widgets import IconLabel, hbox, hline, kbd, label
 
 ROW_H = 42
@@ -58,6 +59,7 @@ class CommandPalette(FramelessDialog):
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setFixedHeight(ROW_H * VISIBLE_ROWS)
         self.list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        enable_smooth_scroll(self.list, 56)
         self.list.itemClicked.connect(lambda _i: self._run_current())
         self.body.addWidget(self.list)
 

@@ -1,0 +1,6 @@
+# Development / CI tooling — NOT needed to run or package the app:
+#   pip install -r requirements.txt -r requirements-dev.txt
+ruff>=0.5           # linter; CI: strict on build.py/main.py/tests, advisory (--exit-zero) on core/ui
+bandit>=1.7         # security scanner; CI: bandit -r core ui (B101 "assert used" findings are non-blocking)
+pip-audit>=2.7      # advisory dependency audit; CI job runs with continue-on-error
+opencv-python-headless>=4.8   # QR readability tests only (tests/test_qr_export.py skips without it)

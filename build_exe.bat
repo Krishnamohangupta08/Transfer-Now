@@ -4,6 +4,7 @@ REM   build_exe.bat            asks what to build
 REM   build_exe.bat onefile    single portable TransferNow.exe
 REM   build_exe.bat onedir     folder build (starts faster)
 REM   build_exe.bat both       both of the above
+REM A .zip is ALWAYS created in dist\ (ready to upload) and the folder opens when done.
 cd /d "%~dp0"
 
 if not exist .venv\Scripts\python.exe (
@@ -25,5 +26,16 @@ if "%MODE%"=="" (
 )
 
 .venv\Scripts\python.exe build.py %MODE% --zip
+if errorlevel 1 (
+  echo.
+  echo Build FAILED - no zip was created.
+  pause
+  exit /b 1
+)
+echo.
+echo Zip file^(s^) ready to upload:
+if exist dist\TransferNow-portable.zip echo   %CD%\dist\TransferNow-portable.zip
+if exist dist\TransferNow-folder.zip   echo   %CD%\dist\TransferNow-folder.zip
+if exist dist start "" explorer "%CD%\dist"
 echo.
 pause

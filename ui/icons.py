@@ -12,8 +12,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from PyQt6.QtCore import QByteArray, QRectF, Qt
-from PyQt6.QtGui import QIcon, QPainter, QPixmap
+from PyQt6.QtCore import QByteArray, QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import QApplication
 
@@ -29,6 +29,9 @@ ICONS: dict[str, str] = {
              '<rect width="7.5" height="5" x="3.5" y="15.5" rx="2.5"/>'),
     "history": ('<path d="M3.5 12a8.5 8.5 0 1 0 2.8-6.3"/><path d="M3 4v4h4"/>'
                 '<path d="M12 7.5V12l3 2"/>'),
+    "scroll-text": ('<path d="M15 20.5H6a2.5 2.5 0 0 1-2.5-2.5v-1h11v1a2.5 2.5 0 0 0 2.5 2.5Z"/>'
+                    '<path d="M19.5 20.5A2.5 2.5 0 0 0 21 18V5a2 2 0 0 0-2-2H8.5a2 2 0 0 0-2 2v12"/>'
+                    '<path d="M11 8h6"/><path d="M11 12h6"/>'),
     "queue": ('<rect width="18" height="6" x="3" y="4" rx="2.5"/>'
               '<rect width="18" height="6" x="3" y="14" rx="2.5"/>'
               '<path d="M7 7h.01"/><path d="M7 17h.01"/><path d="M11 7h6"/><path d="M11 17h6"/>'),
@@ -271,6 +274,26 @@ def pixmap(name: str, color: Optional[str] = None, size: int = 20,
     if len(_cache) > 512:
         _cache.clear()
     _cache[key] = pm
+    return pm
+
+
+def swatch_pixmap(fill: str, dot: str, ring: str, size: int = 16) -> QPixmap:
+    """Round theme preview: theme background + text-colour dot, outlined with ``ring``."""
+    dpr = max(1.0, _dpr())
+    px = int(size * dpr)
+    pm = QPixmap(px, px)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    r = px / 2.0
+    p.setBrush(QColor(fill))
+    p.setPen(QPen(QColor(ring), max(1.0, 1.2 * dpr)))
+    p.drawEllipse(QPointF(r, r), r - 1.2 * dpr, r - 1.2 * dpr)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(dot))
+    p.drawEllipse(QPointF(r, r), r * 0.34, r * 0.34)
+    p.end()
+    pm.setDevicePixelRatio(dpr)
     return pm
 
 

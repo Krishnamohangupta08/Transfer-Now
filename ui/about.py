@@ -17,6 +17,7 @@ from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import QGridLayout, QLabel, QSizePolicy, QWidget
 
+from . import assets
 from .i18n import i18n, tr
 from .theme import _mix, theme
 from .widgets import Badge, hbox, label, vbox
@@ -28,16 +29,8 @@ PHOTO_FILE = "developer.png"
 # ------------------------------------------------------------------ helpers
 def asset_path(name: str) -> str:
     """Locate a bundled asset (dev tree or PyInstaller bundle)."""
-    bases = []
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        bases.append(os.path.join(meipass, "assets"))
-    bases.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets"))
-    for b in bases:
-        p = os.path.join(b, name)
-        if os.path.exists(p):
-            return p
-    return os.path.join(bases[-1], name)
+    return assets.find(name) or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                              "assets", name)
 
 
 def tech_string() -> str:
@@ -61,7 +54,7 @@ class Portrait(QWidget):
         super().__init__()
         self._name = name
         self._size = size
-        self._src = QPixmap(asset_path(PHOTO_FILE))
+        self._src = assets.pixmap(PHOTO_FILE)       # disk, else the copy embedded in the exe
         self.setFixedSize(size, size)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 

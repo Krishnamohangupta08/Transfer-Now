@@ -136,7 +136,7 @@ class Sidebar(QFrame):
             b.set_collapse(t)
         if self.brand_layout is not None:
             m = self.brand_layout.contentsMargins()
-            self.brand_layout.setContentsMargins(round(_lerp(8, 3, t)), m.top(), m.right(), m.bottom())
+            self.brand_layout.setContentsMargins(round(_lerp(5, 0, t)), m.top(), m.right(), m.bottom())
 
 
 class FrozenView(QWidget):

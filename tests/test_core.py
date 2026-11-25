@@ -24,6 +24,7 @@ MOCK = "file://" + os.path.join(ROOT, "tests", "mock_site", "index.html")
 
 from core import downloader as dl  # noqa: E402
 from core import store  # noqa: E402
+from tests import _deps  # dependency policy: explicit skips only, never silent ones
 
 PAYLOAD = os.urandom(3_000_000)
 
@@ -159,11 +160,23 @@ class TestStore(unittest.TestCase):
 class TestDownloader(unittest.TestCase):
     def setUp(self):
         self.out = tempfile.mkdtemp()
+        # injectable timing: keep regression tests fast and deterministic
+        # (constants are read at call time by core.downloader)
         self._delays = dl.RETRY_DELAYS
+        self._resume = getattr(dl, "RESUME_DELAYS", None)
+        self._timeouts = getattr(dl, "OPEN_TIMEOUTS", None)
         dl.RETRY_DELAYS = [0.05] * 4
+        if self._resume is not None:
+            dl.RESUME_DELAYS = [0.05] * 4
+        if self._timeouts is not None:
+            dl.OPEN_TIMEOUTS = (1, 2)          # the flaky mock withholds FIN on drop
 
     def tearDown(self):
         dl.RETRY_DELAYS = self._delays
+        if self._resume is not None:
+            dl.RESUME_DELAYS = self._resume
+        if self._timeouts is not None:
+            dl.OPEN_TIMEOUTS = self._timeouts
         shutil.rmtree(self.out, ignore_errors=True)
 
     def test_plain(self):
@@ -209,9 +222,6 @@ class TestDownloader(unittest.TestCase):
 
 
 # -------------------------------------------------------------------- engine
-def _chrome_available() -> bool:
-    return bool(shutil.which("google-chrome") or shutil.which("chromium")
-                or shutil.which("chrome") or shutil.which("chromium-browser"))
 
 
 class TestButtonMatching(unittest.TestCase):
@@ -317,7 +327,7 @@ class TestPageProgress(unittest.TestCase):
         return next(p for n, p in reversed(self.events) if n == "bytes")
 
 
-@unittest.skipUnless(_chrome_available(), "Chrome not installed")
+@unittest.skipUnless(_deps.has_chrome_driver_capability(), _deps.chrome_skip_reason())
 class TestEngine(unittest.TestCase):
     def setUp(self):
         os.environ["TN_SITE_URL"] = MOCK
@@ -325,7 +335,8 @@ class TestEngine(unittest.TestCase):
         importlib.reload(eng)
         self.eng = eng
         self.f1 = os.path.join(tempfile.mkdtemp(), "a.txt")
-        open(self.f1, "w").write("hello")
+        with open(self.f1, "w") as f:
+            f.write("hello")
         self.events: list = []
 
     def run_engine(self, **kw):
@@ -371,12 +382,21 @@ class TestEngine(unittest.TestCase):
         import importlib; importlib.reload(self.eng)
         e = self.run_engine(email="me@example.com")
         t = threading.Thread(target=e.run); t.start()
+        # bounded wait: browser startup may fail before the upload step is ever
+        # reached — the loop must then fail with diagnostics, not wait forever
+        deadline = time.monotonic() + 120
         while not any(n == "step" and p[0] == "upload" for n, p in self.events):
+            if not t.is_alive():
+                self.fail(f"engine thread died before the upload step: {self.events}")
+            if time.monotonic() > deadline:
+                e.request_stop()
+                t.join(5)
+                self.fail(f"engine never reached the upload step in 120s: {self.events}")
             time.sleep(0.1)
         time.sleep(0.5)
-        t0 = time.time(); e.request_stop(); t.join(20)
+        t0 = time.monotonic(); e.request_stop(); t.join(20)
         self.assertFalse(t.is_alive(), "engine hung on cancel")
-        self.assertLess(time.time() - t0, 12)
+        self.assertLess(time.monotonic() - t0, 12)
         self.assertEqual(self.last("failed"), "cancelled")
         time.sleep(0.5)
         self.assertIsNone(e._driver)

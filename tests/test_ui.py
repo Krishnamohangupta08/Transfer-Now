@@ -25,7 +25,8 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from core import downloader  # noqa: E402
 from core.store import History, Settings  # noqa: E402
-from tests.test_core import PAYLOAD, Handler, Server, _chrome_available  # noqa: E402
+from tests import _deps  # dependency policy: explicit skips only, never silent ones
+from tests.test_core import PAYLOAD, Handler, Server  # noqa: E402
 from ui.ctx import Ctx  # noqa: E402
 from ui.theme import theme  # noqa: E402
 from ui.window import AppWindow  # noqa: E402
@@ -97,30 +98,34 @@ class Base(unittest.TestCase):
 
 
 class TestFilesAndOverlay(Base):
-    """No file-count limit, folders expand to their files, drop overlay is fully opaque."""
+    """20-item limit (1.0.0.1), folders expand to their files, drop overlay is fully opaque."""
 
     def _page(self):
         self.w.navigate("upload")
         return self.w.pages["upload"]
 
     def test_more_than_ten_files(self):
+        """Up to MAX_FILES_PER_TRANSFER (20) files are accepted individually; the rest
+        are never added silently (the overflow prompt is answered "add" here)."""
         up = self._page()
+        up._confirm_overflow = lambda paths, plan: "add"
         paths = []
         for i in range(120):
             p = os.path.join(self.tmp, f"f{i:03d}.bin")
             open(p, "wb").write(b"x" * (i + 1))
             paths.append(p)
         up.add_paths(paths)
-        self.assertEqual(len(up.files), 120)
+        self.assertTrue(wait_until(lambda: True, 15))
+        self.assertEqual(len(up.files), 20)
         self.assertTrue(up.go.isEnabled())
-        self.assertEqual(up.sum_files.text(), "120")
+        self.assertEqual(up.sum_files.text(), "20 / 20")
 
     def test_folder_is_expanded_not_zipped(self):
         up = self._page()
         root = os.path.join(self.tmp, "photos")
         os.makedirs(os.path.join(root, "2026", "trip"))
         names = []
-        for i in range(25):                      # more than the old 10-file cap
+        for i in range(15):                      # more than the old 10-file cap, within the 20 limit
             d = os.path.join(root, "2026", "trip") if i % 2 else root
             p = os.path.join(d, f"img{i}.jpg")
             open(p, "wb").write(b"jpg" * 10)
@@ -128,7 +133,7 @@ class TestFilesAndOverlay(Base):
         open(os.path.join(root, "empty.txt"), "w").close()          # empty: skipped
         open(os.path.join(root, "Thumbs.db"), "wb").write(b"junk")  # junk: skipped
         up.add_paths([root])
-        self.assertTrue(wait_until(lambda: not up._scans and len(up.files) == 25, 15))
+        self.assertTrue(wait_until(lambda: not up._scans and len(up.files) == 15, 15))
         self.assertEqual(sorted(up.files), sorted(os.path.abspath(p) for p in names))
         self.assertTrue(up.go.isEnabled())
 
@@ -160,7 +165,7 @@ class TestFilesAndOverlay(Base):
         ov.end()
 
 
-@unittest.skipUnless(_chrome_available(), "Chrome not installed")
+@unittest.skipUnless(_deps.has_chrome_driver_capability(), _deps.chrome_skip_reason())
 class TestUploadFlow(Base):
     def _page(self):
         self.w.navigate("upload")

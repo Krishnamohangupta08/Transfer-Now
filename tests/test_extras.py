@@ -119,7 +119,9 @@ class TestSvgIcons(unittest.TestCase):
 
 class TestVersion(unittest.TestCase):
     def test_version_is_100(self):
-        self.assertEqual(dialogs_mod.VERSION, "1.0.0.0")
+        from core.version import APP_VERSION
+        self.assertEqual(dialogs_mod.VERSION, APP_VERSION)
+        self.assertEqual(APP_VERSION, "1.0.0.1")
 
 
 class TestTrayAndClipboard(Base):

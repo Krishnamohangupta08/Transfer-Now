@@ -24,6 +24,7 @@ from typing import Optional
 
 import requests
 
+from . import netpolicy
 from .downloader import HEADERS, VALIDITY_RE, parse_transfer_id
 
 # Only phrases a *visible* "gone" page would show.  Deliberately specific: the
@@ -102,12 +103,23 @@ def check_link_detail(link: str, timeout: float = 12.0, retries: int = 1,
     url = normalize_link(link)
     if url is None:
         return {"state": "unknown", "valid_until": "", "http": 0, "reason": "not a TransferNow link"}
+    # M1: validate the destination before any socket is opened; the share
+    # page must live on an allowlisted transfernow.net host (SSRF guard).
+    try:
+        netpolicy.validate_outbound_url(url, purpose="linkcheck")
+    except netpolicy.NetworkPolicyError:
+        return {"state": "unknown", "valid_until": "", "http": 0,
+                "reason": "link target rejected by network policy"}
     last = {"state": "unknown", "valid_until": "", "http": 0, "reason": "unreachable"}
     for attempt in range(retries + 1):
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=timeout, stream=True,
-                                allow_redirects=True)
-        except requests.RequestException as exc:
+            # M1/M3: manual, per-hop validated redirects; no implicit
+            # requests-level redirect following anywhere on this path.
+            resp = netpolicy.follow_redirects(
+                lambda u: requests.get(u, headers=HEADERS, timeout=timeout,
+                                       stream=True, allow_redirects=False),
+                url, purpose="linkcheck")
+        except (requests.RequestException, netpolicy.NetworkPolicyError) as exc:
             last = {"state": "unknown", "valid_until": "", "http": 0,
                     "reason": exc.__class__.__name__}
             if attempt < retries:

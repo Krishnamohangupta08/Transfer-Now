@@ -33,6 +33,9 @@ class _HintLabel(QLabel):
 
     def __init__(self) -> None:
         super().__init__("")
+        from PyQt6.QtCore import Qt
+        # error hints may embed remote-derived text: never let Qt parse it
+        self.setTextFormat(Qt.TextFormat.PlainText)
         self.setProperty("role", "caption")
         self.hide()
 
@@ -79,6 +82,7 @@ class DownloadPage(Page):
         self._dl: Optional[DownloadThread] = None
         self._saved = ""
         self._state = S_EMPTY
+        self._closing = False               # shutdown(): stale callbacks become no-ops
 
         # link card ----------------------------------------------------------
         card = QFrame()
@@ -125,6 +129,7 @@ class DownloadPage(Page):
         top.addWidget(Badge("package", 52, round_=False), 0, Qt.AlignmentFlag.AlignVCenter)
         col = vbox(spacing=3)
         self.info_title = label("", "h2")
+        self.info_title.setTextFormat(Qt.TextFormat.PlainText)   # remote title: plain text
         self.info_sub = label("", "muted")
         col.addWidget(self.info_title)
         col.addWidget(self.info_sub)
@@ -232,6 +237,7 @@ class DownloadPage(Page):
         el = hbox(self.err_card, (22, 20, 22, 20), 16)
         el.addWidget(Badge("alert-circle", 48, "danger"), 0, Qt.AlignmentFlag.AlignTop)
         self.err_text = label("", "muted", wrap=True, selectable=True)
+        self.err_text.setTextFormat(Qt.TextFormat.PlainText)     # error text: plain text
         ec = vbox(spacing=3)
         self.err_title = label(tr("dl.error"), "h2")
         ec.addWidget(self.err_title)
@@ -328,14 +334,13 @@ class DownloadPage(Page):
         self.fetch_now()
 
     def _on_text(self, text: str) -> None:
-        if self._state == S_RUNNING:
+        if self._state == S_RUNNING or self._closing:
             return
         text = text.strip()
         self._debounce.stop()
         if not text:
-            self._token += 1
+            self._invalidate()
             self.hint.setText("")
-            self._set_state(S_EMPTY)
             self.link.setProperty("state", "")
             repolish(self.link)
             return
@@ -343,13 +348,34 @@ class DownloadPage(Page):
         self.link.setProperty("state", "" if ok else "error")
         repolish(self.link)
         if ok:
+            if (self._info is not None
+                    and parse_transfer_id(text) != self._info.get("transfer_id")):
+                self._invalidate()          # the card on screen is for another link
             self.hint.setText("")
             self._debounce.start()
         else:
+            self._invalidate()              # an invalid string must not leave a stale card
             self.hint.setText(tr("dl.not_link"))
             self._hint_tone("bad")
-            if self._state != S_EMPTY:
-                self._set_state(S_EMPTY)
+
+    def _invalidate(self) -> None:
+        """Drop the shown info card: the field no longer matches it.  Bumps the
+        request token so any in-flight fetch becomes stale, and returns to the
+        empty state while keeping the hint line."""
+        self._token += 1
+        self._debounce.stop()
+        self._info = None
+        if self._state in (S_LOADING, S_INFO, S_DONE, S_ERROR):
+            self._set_state(S_EMPTY)
+
+    def _matches_current(self, info: dict) -> bool:
+        """Belt and braces: a fetch response must still describe what the field
+        shows, even if its token somehow matches."""
+        tid = parse_transfer_id(self.link.text().strip())
+        if tid != info.get("transfer_id"):
+            return False
+        link = str(info.get("link") or "")
+        return not link or parse_transfer_id(link) == tid
 
     def _auto_fetch(self) -> None:
         if self._state not in (S_RUNNING, S_LOADING) and parse_transfer_id(self.link.text()):
@@ -382,7 +408,7 @@ class DownloadPage(Page):
             pass
 
     def _on_info(self, token: int, info: dict) -> None:
-        if token != self._token:
+        if self._closing or token != self._token or not self._matches_current(info):
             return
         self._info = info
         self.info_title.setText(info.get("title") or "Files are ready")
@@ -399,7 +425,9 @@ class DownloadPage(Page):
             r = QWidget()
             rl = hbox(r, (0, 10, 0, 10), 12)
             rl.addWidget(Badge(file_icon_for(f["name"]), 34, round_=False))
-            rl.addWidget(ElidedLabel(f["name"]), 1)
+            nm = ElidedLabel(f["name"])
+            nm.setTextFormat(Qt.TextFormat.PlainText)      # untrusted remote name
+            rl.addWidget(nm, 1)
             rl.addWidget(label(human_size(f["size"]) if f["size"] else "", "caption"))
             self.files_lay.addWidget(r)
         if n > 8:
@@ -414,7 +442,7 @@ class DownloadPage(Page):
         self._set_state(S_INFO)
 
     def _on_fetch_failed(self, token: int, msg: str) -> None:
-        if token != self._token:
+        if self._closing or token != self._token:
             return
         self._info = None
         self.hint.setText(msg)
@@ -441,7 +469,11 @@ class DownloadPage(Page):
             self.start()
 
     def start(self) -> None:
-        if self.is_running() or not self._info:
+        if self.is_running():
+            return
+        if (not self._info
+                or parse_transfer_id(self.link.text().strip()) != self._info.get("transfer_id")):
+            self.fetch_now()                # stale/missing card: re-fetch, never trust it
             return
         folder = self.ctx.settings.download_folder
         try:
@@ -480,6 +512,8 @@ class DownloadPage(Page):
             pass
 
     def _on_progress(self, done: int, total: int, speed: float) -> None:
+        if self._closing:
+            return
         self.graph.push(speed)
         if total:
             self.run_bar.setValue(int(1000 * done / total))
@@ -510,6 +544,7 @@ class DownloadPage(Page):
             self._dl.stop()
 
     def shutdown(self) -> None:
+        self._closing = True                # queued callbacks from here on are no-ops
         self._token += 1
         if self._dl is not None:
             self._dl.stop()
@@ -518,6 +553,8 @@ class DownloadPage(Page):
             self._fetch.wait(3000)
 
     def _on_success(self, path: str) -> None:
+        if self._closing:
+            return
         self.ctx.activity.emit("", -1)
         self._saved = path
         info = self._info or {}
@@ -537,6 +574,8 @@ class DownloadPage(Page):
             self.open_folder()
 
     def _on_failed(self, msg: str) -> None:
+        if self._closing:
+            return
         self.ctx.activity.emit("", -1)
         self.run_bar.setRange(0, 1000)
         if msg == "cancelled":

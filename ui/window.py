@@ -16,6 +16,7 @@ from . import icons, motion
 from .ctx import Ctx
 from .i18n import i18n, tr
 from .pages.base import Page
+from .pages.changelog import ChangelogPage
 from .pages.dashboard import DashboardPage
 from .pages.download import DownloadPage
 from .pages.history import HistoryPage
@@ -30,9 +31,10 @@ from .overlay import DimOverlay
 from .dropfx import WindowDropOverlay
 from .sidebar import FrozenView, Sidebar
 from .sounds import sounds
-from .theme import THEME_LABELS, theme
+from .theme import THEMES, THEME_LABELS, theme
 from .tray import TrayIcon
 from .hub import HUB
+from .iconfx import AnimatedLogo
 from .widgets import (
     Button, ElidedLabel, NavButton, Pill, ThemeToggle, Toast, hbox, label, repolish, vbox,
 )
@@ -107,6 +109,7 @@ class AppWindow(QMainWindow):
         self._factories: dict[str, Callable[[Ctx], Page]] = {
             "dashboard": DashboardPage, "upload": UploadPage, "queue": QueuePage,
             "download": DownloadPage, "history": HistoryPage, "settings": SettingsPage,
+            "changelog": ChangelogPage,
         }
         self._commands: list = []            # (title, group, shortcut, QAction) for the palette
         self._menu_icon_pairs: list = []     # (QAction, icon name) for theme-aware menu icons
@@ -133,6 +136,14 @@ class AppWindow(QMainWindow):
         self._flash.timeout.connect(self._status_reset)
         ctx.navigate = self.navigate
         ctx.toast = self.toast.show_message
+        # A4-05: storage problems (full disk, read-only profile, corrupt-file
+        # backups) were only ever written to stderr — invisible in the
+        # windowed frozen build.  Surface whatever happened before the UI
+        # existed, at startup.
+        for _store in (self.ctx.settings, self.ctx.history):
+            _err = getattr(_store, "last_error", None)
+            if _err:
+                self.toast.show_message(f"Storage warning: {_err}", "warning")
         ctx.activity.connect(self._on_activity)
         ctx.settings.on_change(self._setting_changed)
 
@@ -154,9 +165,9 @@ class AppWindow(QMainWindow):
         lay.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)   # width is animated, never pushed
 
         brand = hbox(spacing=11)
-        brand.setContentsMargins(8, 0, 0, 0)
-        self.logo = label("")
-        self.logo.setFixedSize(34, 34)
+        brand.setContentsMargins(5, 0, 0, 0)
+        self.logo = AnimatedLogo(34, pad=3)
+        self.logo.clicked.connect(lambda: sounds.play("nav"))
         brand.addWidget(self.logo)
         brand_text = QWidget()
         col = vbox(brand_text, spacing=0)
@@ -212,6 +223,14 @@ class AppWindow(QMainWindow):
         self.activity.hide()
         lay.addWidget(self.activity)
         lay.addSpacing(12)
+
+        clog = NavButton(tr("nav.changelog"), "scroll-text")
+        clog._text_key = "nav.changelog"
+        clog.clicked.connect(lambda: self.navigate("changelog"))
+        self.group.addButton(clog)
+        self.nav["changelog"] = clog
+        lay.addWidget(clog)
+        sb.register_nav(clog)
 
         sett = NavButton(tr("nav.settings"), "gear")
         sett._text_key = "nav.settings"
@@ -274,7 +293,6 @@ class AppWindow(QMainWindow):
         if getattr(self, "_booted", False):
             QTimer.singleShot(0, lambda: sounds.play("theme"))
             QTimer.singleShot(0, self._theme_fade)
-        self.logo.setPixmap(icons.logo_pixmap(34))
         self.theme_btn.set_dark(theme.dark)
 
     def _pick_theme(self, mode: str) -> None:
@@ -322,6 +340,7 @@ class AppWindow(QMainWindow):
                 if head is not None:
                     head.setText(tr(section_key))
         self.nav["settings"].set_text(tr("nav.settings"))
+        self.nav["changelog"].set_text(tr("nav.changelog"))
         self._sidebar_changed(self.sidebar.is_collapsed(), save=False)
         self.status_left.setText(tr("misc.ready"))
         self.tray.retranslate()
@@ -453,12 +472,22 @@ class AppWindow(QMainWindow):
         return {k: v for k, v in ((tr(tk), ic) for tk, ic in
                 (("nav.dashboard", "grid"), ("nav.upload", "cloud-upload"),
                  ("nav.queue", "queue"), ("nav.download", "cloud-download"),
-                 ("nav.history", "history"), ("nav.settings", "gear")))}.get(title, "")
+                 ("nav.history", "history"), ("nav.settings", "gear"),
+                 ("nav.changelog", "scroll-text")))}.get(title, "")
+
+    def _theme_menu_icon(self, key: str) -> QIcon:
+        """Icon for a Theme-menu entry: a round preview of that theme (monitor for System)."""
+        if key not in THEMES:
+            return QIcon(icons.pixmap("monitor", theme.pal["text2"], 16, 1.6))
+        pal = THEMES[key]
+        return QIcon(icons.swatch_pixmap(pal["sheet"], pal["text"], theme.pal["text2"], 16))
 
     def _refresh_menu_icons(self) -> None:
         for a, name in self._menu_icon_pairs:
             if name:
                 a.setIcon(QIcon(icons.pixmap(name, theme.pal["text2"], 16, 1.6)))
+        for key, a in getattr(self, "_theme_icon_acts", {}).items():
+            a.setIcon(self._theme_menu_icon(key))
 
     def _act(self, menu, text: str, slot, shortcut: str = "", checkable: bool = False,
              palette: bool = True) -> QAction:
@@ -516,13 +545,16 @@ class AppWindow(QMainWindow):
                                              ("queue", "nav.queue"),
                                              ("download", "nav.download"),
                                              ("history", "nav.history"),
-                                             ("settings", "nav.settings")), 1):
-            sc = {"history": "Ctrl+H", "settings": "Ctrl+,"}.get(key, f"Ctrl+{i}")
+                                             ("settings", "nav.settings"),
+                                             ("changelog", "nav.changelog")), 1):
+            sc = {"history": "Ctrl+H", "settings": "Ctrl+,",
+                  "changelog": "Ctrl+Shift+L"}.get(key, f"Ctrl+{i}")
             self._act(m, tr(text_key), lambda k=key: self.navigate(k), sc)
         m.addSeparator()
         self._sidebar_act = self._act(m, tr("sb.expand") if self.sidebar.is_collapsed()
                                       else tr("sb.collapse"), self._toggle_sidebar, "Ctrl+B")
         tm = RoundMenu("Theme", self)
+        tm.setObjectName("thememenu")          # styled: the selected theme gets a soft highlight
         tm_name = self._menu_icon_for("Theme")
         if tm_name:
             tm.setIcon(QIcon(icons.pixmap(tm_name, theme.pal["text2"], 16, 1.6)))
@@ -530,11 +562,14 @@ class AppWindow(QMainWindow):
         m.addMenu(tm)
         grp = QActionGroup(self)
         self._theme_acts = {}
+        self._theme_icon_acts = {}
         for key in THEME_ORDER + ["system"]:
             a = self._act(tm, THEME_LABELS[key], lambda k=key: self.ctx.settings.set("theme", k),
                           "", True)
+            a.setIcon(self._theme_menu_icon(key))
             grp.addAction(a)
             self._theme_acts[key] = a
+            self._theme_icon_acts[key] = a
         self._theme_acts.get(self.ctx.settings.get("theme", "dark"),
                              self._theme_acts["dark"]).setChecked(True)
         m.addSeparator()

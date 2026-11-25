@@ -3,6 +3,7 @@
 paint themselves."""
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from PyQt6.QtCore import (
@@ -18,7 +19,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from . import icons, motion
+from . import icons, iconfx, motion
 from .i18n import LANGS, flag_pixmap, i18n, tr
 from .sounds import sounds
 from .theme import theme
@@ -34,6 +35,7 @@ def repolish(w: QWidget) -> None:
 def label(text: str = "", role: str = "", wrap: bool = False,
           selectable: bool = False) -> QLabel:
     lb = QLabel(text)
+    lb.setTextFormat(Qt.TextFormat.PlainText)     # never render untrusted strings as rich text
     if role:
         lb.setProperty("role", role)
     lb.setWordWrap(wrap)
@@ -261,12 +263,56 @@ class NavButton(QPushButton):
         self._text = text
         self._badge = 0
         self._collapse = 0.0                 # 0 = expanded row, 1 = icon-only rail
+        self._hov = 0.0                      # hover amount 0..1
+        self._act = 0.0                      # active amount 0..1 (icon colour + indicator bar)
+        self._press = 0.0                    # pressed amount 0..1
+        self._pop = 0.0                      # one-shot "pop" bump when the page becomes active
         self.setCheckable(True)
         self.setFixedHeight(self.HEIGHT)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._a_hov = iconfx.make_anim(self, self._set_hov)
+        self._a_act = iconfx.make_anim(self, self._set_act, kind="back", overshoot=1.6)
+        self._a_press = iconfx.make_anim(self, self._set_press)
+        self._a_pop = iconfx.make_anim(self, self._set_pop)
+        self.toggled.connect(self._on_toggled)
+        self.pressed.connect(lambda: iconfx.run(self._a_press, self._press, 1.0, 80))
+        self.released.connect(lambda: iconfx.run(self._a_press, self._press, 0.0, 320,
+                                                 kind="back", overshoot=2.4))
         theme.changed.connect(self.update)
         i18n.changed.connect(self._retranslate)
+
+    # ---- icon animation state
+    def _set_hov(self, v: float) -> None:
+        self._hov = v
+        self.update()
+
+    def _set_act(self, v: float) -> None:
+        self._act = v
+        self.update()
+
+    def _set_press(self, v: float) -> None:
+        self._press = v
+        self.update()
+
+    def _set_pop(self, v: float) -> None:
+        self._pop = v
+        self.update()
+
+    def _on_toggled(self, on: bool) -> None:
+        if not self.isVisible():                         # initial state: snap, no show-off
+            self._act = 1.0 if on else 0.0
+            self.update()
+            return
+        iconfx.run(self._a_act, self._act, 1.0 if on else 0.0, 420 if on else 160,
+                   kind="back" if on else "cubic", overshoot=1.6)
+        if on:                                           # icon bounces as the page opens
+            iconfx.run(self._a_pop, 0.0, 1.0, 460)
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        super().showEvent(e)
+        if not (self._a_act.state() == QAbstractAnimation.State.Running):
+            self._act = 1.0 if self.isChecked() else 0.0
 
     def _retranslate(self) -> None:
         self.setText(self._text.replace("&", "&&"))
@@ -292,37 +338,60 @@ class NavButton(QPushButton):
         self.update()
 
     def enterEvent(self, e) -> None:  # noqa: N802
-        self.update()
+        iconfx.run(self._a_hov, self._hov, 1.0, 170)
         super().enterEvent(e)
 
     def leaveEvent(self, e) -> None:  # noqa: N802
-        self.update()
+        iconfx.run(self._a_hov, self._hov, 0.0, 220)
+        iconfx.run(self._a_press, self._press, 0.0, 220)
         super().leaveEvent(e)
 
     def paintEvent(self, _e) -> None:  # noqa: N802
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         c = theme.pal
         w, h = self.width(), self.height()
         r = QRectF(0.5, 0.5, w - 1, h - 1)
         on = self.isChecked()
-        if on:
+        act = iconfx.clamp01(self._act)
+        if act > 0.01:                                   # active tile fades in
+            p.setOpacity(act)
             p.setPen(QPen(QColor(c["border"]), 1))
             p.setBrush(QColor(c["surface"] if not theme.dark else c["surface_hi"]))
             p.drawRoundedRect(r, 10, 10)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(c["accent"]))
-            p.drawRoundedRect(QRectF(1.0, h / 2 - 8, 3, 16), 1.5, 1.5)
-        elif self.underMouse() and self.isEnabled():
+            p.setOpacity(1.0)
+        if self._hov > 0.01 and self.isEnabled() and act < 0.99:
             hov = QColor(c["text"])
-            hov.setAlpha(14)
+            hov.setAlpha(int(14 * self._hov * (1.0 - act)))
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(hov)
             p.drawRoundedRect(r, 10, 10)
+        if self._act > 0.01:                             # Win11 indicator: grows out of the centre
+            bar_h = 16 * min(1.15, self._act)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(c["accent"]))
+            p.drawRoundedRect(QRectF(1.0, h / 2 - bar_h / 2, 3, bar_h), 1.5, 1.5)
         t = self._collapse
         ix = 14 + ((w - 17) / 2 - 14) * t               # icon glides to the rail centre
-        pm = icons.pixmap(self._icon, c["accent"] if on else c["text2"], 17, 1.6)
-        p.drawPixmap(QPoint(round(ix), (h - 17) // 2), pm)
+        # icon: crossfade text2 -> accent, hover lift, press squash, activation pop
+        sc = (1.0 + 0.10 * self._hov - 0.13 * self._press
+              + 0.20 * math.sin(math.pi * iconfx.clamp01(self._pop)) * (1.0 - self._pop * 0.35))
+        dy = -1.0 * self._hov * (1.0 - self._press) - 2.2 * math.sin(math.pi * iconfx.clamp01(self._pop))
+        ic = QPointF(ix + 8.5, h / 2.0 + dy)
+        p.save()
+        p.translate(ic)
+        p.scale(sc, sc)
+        p.translate(-8.5, -8.5)
+        base = icons.pixmap(self._icon, c["text"] if self._hov > 0.5 and not on else c["text2"], 17, 1.6)
+        if act < 0.99:
+            p.setOpacity(1.0 - act)
+            p.drawPixmap(QPoint(0, 0), base)
+        if act > 0.01:
+            p.setOpacity(iconfx.clamp01(act))
+            p.drawPixmap(QPoint(0, 0), icons.pixmap(self._icon, c["accent"], 17, 1.6))
+        p.setOpacity(1.0)
+        p.restore()
+        ix = float(ix)
         label_op = max(0.0, 1.0 - t * 2.4)
         f = QFont(self.font())
         f.setPixelSize(13)
@@ -368,24 +437,46 @@ class NavButton(QPushButton):
 
 
 class ThemeToggle(QWidget):
-    """Sun / moon segmented toggle at the foot of the sidebar."""
+    """Sun / moon segmented toggle at the foot of the sidebar.
+
+    The thumb springs between the two halves; the sun spins up as it becomes
+    active and the moon tilts in, like the Windows 11 quick-settings toggles.
+    """
     picked = pyqtSignal(str)            # "light" | "dark"
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._dark = theme.dark
+        self._pos = 1.0 if self._dark else 0.0      # thumb position 0 (sun) .. 1 (moon)
+        self._spin = 1.0                            # 0..1 one-shot icon flourish
         self.setFixedSize(68, 28)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("Light / dark")
+        self._a_pos = iconfx.make_anim(self, self._set_pos, kind="back", overshoot=1.3)
+        self._a_spin = iconfx.make_anim(self, self._set_spin)
         theme.changed.connect(self._sync)
 
-    def _sync(self) -> None:
-        self._dark = theme.dark
+    def _set_pos(self, v: float) -> None:
+        self._pos = v
         self.update()
 
-    def set_dark(self, on: bool) -> None:
-        self._dark = on
+    def _set_spin(self, v: float) -> None:
+        self._spin = v
         self.update()
+
+    def _sync(self) -> None:
+        self.set_dark(theme.dark)
+
+    def set_dark(self, on: bool) -> None:
+        if on == self._dark and abs(self._pos - (1.0 if on else 0.0)) < 1e-3:
+            return
+        self._dark = on
+        if self.isVisible():
+            iconfx.run(self._a_pos, self._pos, 1.0 if on else 0.0, 420)
+            iconfx.run(self._a_spin, 0.0, 1.0, 650)
+        else:
+            self._pos = 1.0 if on else 0.0
+            self.update()
 
     def mouseReleaseEvent(self, e) -> None:  # noqa: N802
         if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
@@ -394,21 +485,37 @@ class ThemeToggle(QWidget):
 
     def paintEvent(self, _e) -> None:  # noqa: N802
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         c = theme.pal
         w, h = self.width(), self.height()
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(c["surface3"] if theme.dark else c["surface_hi"]))
         p.drawRoundedRect(QRectF(0, 0, w, h), h / 2, h / 2)
         half = w / 2
-        tile = QRectF((half if self._dark else 0) + 2.5, 2.5, half - 5, h - 5)
+        tile = QRectF(self._pos * half + 2.5, 2.5, half - 5, h - 5)
         p.setPen(QPen(QColor(c["border"]), 1))
         p.setBrush(QColor(c["surface_hi"] if theme.dark else c["surface"]))
         p.drawRoundedRect(tile, tile.height() / 2, tile.height() / 2)
         for i, name in enumerate(("sun", "moon")):
+            near = 1.0 - min(1.0, abs(self._pos - i))        # 1 when the thumb sits on this icon
+            col = QColor(c["muted"])
+            hi = QColor(c["text"])
+            mix = iconfx.clamp01(near)
+            col = QColor(int(col.red() + (hi.red() - col.red()) * mix),
+                         int(col.green() + (hi.green() - col.green()) * mix),
+                         int(col.blue() + (hi.blue() - col.blue()) * mix))
+            pm = icons.pixmap(name, col.name(), 15, 1.6)
+            cx, cy = i * half + half / 2, h / 2
+            p.save()
+            p.translate(cx, cy)
             active = (i == 1) == self._dark
-            pm = icons.pixmap(name, c["text"] if active else c["muted"], 15, 1.6)
-            p.drawPixmap(QPoint(int(i * half + half / 2 - 7.5), int((h - 15) / 2)), pm)
+            if active and self._spin < 1.0:
+                k = 1.0 - self._spin
+                p.rotate((-90 if i == 0 else 40) * k)           # sun spins, moon tilts
+                s = 1.0 + 0.25 * math.sin(math.pi * self._spin)
+                p.scale(s, s)
+            p.drawPixmap(QPointF(-7.5, -7.5), pm)
+            p.restore()
 
 
 class Segmented(QFrame):
@@ -495,6 +602,7 @@ class ElidedLabel(QLabel):
 
     def __init__(self, text: str = "", role: str = "", parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)   # filenames / links are plain text
         if role:
             self.setProperty("role", role)
         self._full = ""
@@ -518,7 +626,10 @@ class ElidedLabel(QLabel):
         shown = fm.elidedText(self._full, Qt.TextElideMode.ElideMiddle, max(10, self.width()))
         if shown != self.text():
             self.setText(shown)
-        self.setToolTip(self._full if shown != self._full else "")
+        tip = self._full if shown != self._full else ""
+        # QToolTip re-runs Qt's rich-text heuristic (even on entity-encoded
+        # text): never hand raw '<'/'&' from remote file names to it
+        self.setToolTip(tip.replace("<", "").replace(">", "").replace("&", "") if tip else "")
 
 
 # ------------------------------------------------------------------ switch

@@ -16,26 +16,65 @@ and immediately kills the browser, so a cancel can never hang the UI.
 """
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import random
 import re
-import shutil
 import subprocess
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
-from typing import Callable, Optional
+import sys
 
-from . import procs
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from . import limits, procs
 from .emailgen import random_email
 
-SITE_URL = os.environ.get("TN_SITE_URL") or "https://www.transfernow.net/en"
-LINK_RE = re.compile(r"https://www\.transfernow\.net/(?:en/)?dl/[A-Za-z0-9-]+")
+def _site_url_default() -> str:
+    """The upload destination is a security boundary (A4-06/A4-13).
 
-# No limit on the number of files — only the total size is capped.
+    ``TN_SITE_URL`` exists for source/CI development only: a frozen
+    (shipped) build NEVER honors it, so an env var can never point the
+    upload engine or its browser automation at an unexpected site.
+    """
+    env = os.environ.get("TN_SITE_URL")
+    if env and not getattr(sys, "frozen", False):
+        return env
+    return "https://www.transfernow.net/en"
+
+
+SITE_URL = _site_url_default()
+
+
+def _env_driver_path() -> str | None:
+    """A4-06: the arbitrary-driver-executable override is source/CI-only; a
+    frozen build never launches a binary named by an environment variable."""
+    return (None if getattr(sys, "frozen", False)
+            else os.environ.get("TN_CHROMEDRIVER"))
+
+# Item count (MAX_FILES_PER_TRANSFER, core.limits) and total size are both capped.
 MAX_BYTES = 5 * 1024 ** 3
+
+# Cookie-consent policy (privacy rule): this app must NEVER accept — or
+# silently waive — any consent on the user's behalf.  Accepting cookies is a
+# decision that belongs to the user, not the software.  Only rejection /
+# necessary-only choices are eligible for auto-clicking (exact,
+# case-insensitive label match); when the page offers none of them, the
+# wizard is left untouched for the user to handle manually.
+CONSENT_REJECT_LABELS = (
+    "Reject all",
+    "Refuser tout",
+    "Alle ablehnen",
+    "Rechazar todo",
+    "Rifiuta tutto",
+    "Continuer sans accepter",
+    "Continue without accepting",
+    "Only necessary",
+    "Necessary only",
+)
 
 # (key, label shown in the UI stepper, progress % when the step starts)
 STEPS = [
@@ -118,7 +157,7 @@ class EngineError(RuntimeError):
 @dataclass
 class EngineOptions:
     files: list[str]
-    email: Optional[str] = None       # None/"" -> random each run
+    email: str | None = None         # None/"" -> anonymous each run
     human_pace: bool = True
 
 
@@ -152,10 +191,8 @@ class TransferEngine:
             self._step("boot")
             procs.register(None, profile)
             driver = self._make_driver(profile)
-            try:
+            with contextlib.suppress(Exception):   # pid may already be gone
                 procs.register(driver.service.process.pid)
-            except Exception:  # noqa: BLE001
-                pass
             with self._lock:
                 self._driver = driver
             if self._stop.is_set():
@@ -187,6 +224,11 @@ class TransferEngine:
             self._pace(0.5, 1.0)
 
             self._step("email")
+            # No user address configured: fall back to an anonymous,
+            # IANA-reserved sender (core.emailgen).  The UI (updated
+            # separately) labels this "anonymous sender — reserved domain,
+            # not a real mailbox"; the recommended mode is the user's own
+            # email ("fixed" sender mode).
             email = (self.opts.email or "").strip() or random_email()
             if not self._fill_email(driver, email):
                 raise EngineError("Could not fill in the sender email field.")
@@ -224,6 +266,11 @@ class TransferEngine:
         files = self.opts.files
         if not files:
             raise EngineError("No files selected.")
+        # Backend enforcement: a direct worker/API call hits the same item cap as the UI.
+        try:
+            limits.check_item_count(files)
+        except ValueError as exc:
+            raise EngineError(str(exc)) from exc
         total = 0
         for f in files:
             if not os.path.isfile(f):
@@ -277,36 +324,38 @@ class TransferEngine:
             from selenium.webdriver.edge.options import Options
             from selenium.webdriver.edge.service import Service
             opts, svc_cls, drv_cls = Options(), Service, webdriver.Edge
-        for arg in ("--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
-                    "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-                    "--disable-extensions", "--disable-background-networking",
-                    "--lang=en-US", "--disable-blink-features=AutomationControlled",
-                    f"--user-data-dir={profile}",
-                    f"--window-size={random.randint(1380, 1480)},"
-                    f"{random.randint(860, 940)}"):
+        # The Chrome sandbox stays ON by default — it is a real security
+        # boundary (render-process isolation) and works on normal desktops.
+        # Opt out ONLY for containers / CI where it cannot run: explicit
+        # TN_CHROME_NO_SANDBOX=1/true, or running as root.  Never a desktop
+        # default.
+        # A4-06: the env hatch is source/CI-only — a frozen build never
+        # drops the Chrome sandbox because of an environment variable
+        # (running as root still needs it).
+        no_sandbox = ((not getattr(sys, "frozen", False)
+                       and os.environ.get("TN_CHROME_NO_SANDBOX", "").strip().lower()
+                       in ("1", "true"))
+                      or (hasattr(os, "geteuid") and os.geteuid() == 0))
+        # Functional flags only: no automation-concealment switches — the
+        # browser stays honest about what it is (no bot-protection bypass).
+        args = ["--headless=new", "--disable-dev-shm-usage", "--disable-gpu",
+                "--no-first-run", "--no-default-browser-check",
+                "--disable-extensions", "--disable-background-networking",
+                "--lang=en-US", f"--user-data-dir={profile}",
+                "--window-size=1440,900"]
+        if no_sandbox:
+            args.append("--no-sandbox")
+        for arg in args:
             opts.add_argument(arg)
         opts.page_load_strategy = "eager"
-        opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-        driver_path = os.environ.get("TN_CHROMEDRIVER")   # optional override (offline / CI)
+        driver_path = _env_driver_path()
         service = svc_cls(executable_path=driver_path) if driver_path else svc_cls()
         if os.name == "nt":  # no flashing console window for the driver
-            try:
+            with contextlib.suppress(Exception):
                 service.creation_flags = subprocess.CREATE_NO_WINDOW
-            except Exception:  # noqa: BLE001
-                pass
         driver = drv_cls(options=opts, service=service)
         driver.set_page_load_timeout(60)
         driver.set_script_timeout(30)
-        # Present as a regular desktop browser (headless adds "HeadlessChrome").
-        try:
-            ua = driver.execute_script("return navigator.userAgent") or ""
-            driver.execute_cdp_cmd("Network.setUserAgentOverride",
-                                   {"userAgent": ua.replace("HeadlessChrome", "Chrome")})
-            driver.execute_cdp_cmd(
-                "Page.addScriptToEvaluateOnNewDocument",
-                {"source": "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"})
-        except Exception:  # noqa: BLE001
-            pass
         return driver
 
     def _kill_driver(self) -> None:
@@ -315,10 +364,8 @@ class TransferEngine:
         if driver is None:
             return
         proc = None
-        try:
+        with contextlib.suppress(Exception):       # driver may already be dead
             proc = driver.service.process
-        except Exception:  # noqa: BLE001
-            pass
         pid = getattr(proc, "pid", None)
         t = threading.Thread(target=self._safe_quit, args=(driver,), daemon=True)
         t.start()
@@ -328,10 +375,8 @@ class TransferEngine:
 
     @staticmethod
     def _safe_quit(driver) -> None:
-        try:
+        with contextlib.suppress(Exception):       # quit is best-effort at teardown
             driver.quit()
-        except Exception:  # noqa: BLE001
-            pass
 
     # ------------------------------------------------------------- utilities
     def _step(self, key: str) -> None:
@@ -363,16 +408,24 @@ class TransferEngine:
 
     # ----------------------------------------------------------- page actions
     def _dismiss_consent(self, driver) -> None:
-        for label in ("Fine with me", "I accept all", "Accept all", "Reject all"):
+        """Best-effort close of the cookie wizard — REJECT-only (see
+        CONSENT_REJECT_LABELS).  Privacy rule: this app never accepts cookies
+        or any other consent on the user's behalf.  Exact, case-insensitive,
+        whitespace-normalised label match on visible buttons/links; when no
+        rejection-style control is visible, nothing is clicked and the wizard
+        stays for the user to handle manually."""
+        for label in CONSENT_REJECT_LABELS:
             try:
                 clicked = driver.execute_script("""
+                    const wanted = arguments[0].replace(/\\s+/g, ' ').trim().toLowerCase();
                     for (const b of document.querySelectorAll('button, a')) {
                         const r = b.getBoundingClientRect();
                         if (r.width === 0) continue;
-                        if ((b.innerText || '').trim() === arguments[0]) { b.click(); return true; }
+                        const t = (b.innerText || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                        if (t === wanted) { b.click(); return true; }
                     }
                     return false;""", label)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — page may be mid-navigation
                 clicked = False
             if clicked:
                 self._pace(0.5, 0.9)
@@ -414,18 +467,16 @@ class TransferEngine:
                         return True
                     for el in driver.find_elements("css selector",
                                                    "input[type=email]"):
-                        try:
+                        with contextlib.suppress(Exception):   # stale element
                             if el.is_displayed():
                                 return True
-                        except Exception:  # noqa: BLE001
-                            continue
                     return False
 
                 if self._poll(form_open, 8):
                     return True
                 # New welcome page: files stashed but the form waits behind
                 # the Start circle — click it, then look for the form again.
-                try:
+                with contextlib.suppress(Exception):   # page may be re-rendering
                     driver.execute_script("""
                         for (const b of document.querySelectorAll('button')) {
                             const r = b.getBoundingClientRect();
@@ -433,8 +484,6 @@ class TransferEngine:
                             const t = (b.innerText || '').trim();
                             if (t === 'Start' || t === 'Add files') { b.click(); break; }
                         }""")
-                except Exception:  # noqa: BLE001
-                    pass
             self._pace(0.6, 1.2)
         if not registered:
             self._log("File inputs visible: "
@@ -458,25 +507,21 @@ class TransferEngine:
                 return False
 
         # 1) plain send_keys (works when the input is stable)
-        try:
+        with contextlib.suppress(Exception):       # stale element — other levels retry
             inp.send_keys(payload)
-        except Exception:  # noqa: BLE001
-            pass
         if registered():
             return True
         # 2) some builds refuse display:none inputs — reveal and retry
-        try:
+        with contextlib.suppress(Exception):       # stale element — CDP level retries
             driver.execute_script(
                 "const i = arguments[0]; i.removeAttribute('class');"
                 "i.style.cssText='position:fixed;top:0;left:0;width:8px;"
                 "height:8px;opacity:0.01;z-index:9999';", inp)
             inp.send_keys(payload)
-        except Exception:  # noqa: BLE001
-            pass
         if registered():
             return True
         # 3) CDP — browser-level, immune to framework re-renders
-        try:
+        with contextlib.suppress(Exception):   # not every flavour of driver has CDP
             doc = driver.execute_cdp_cmd("DOM.getDocument", {"depth": -1})
             q = driver.execute_cdp_cmd("DOM.querySelectorAll", {
                 "nodeId": doc["root"]["nodeId"],
@@ -484,20 +529,16 @@ class TransferEngine:
             if q.get("nodeIds"):
                 driver.execute_cdp_cmd("DOM.setFileInputFiles", {
                     "files": list(files), "nodeId": q["nodeIds"][-1]})
-        except Exception:  # noqa: BLE001 — not every flavour of driver has CDP
-            pass
         if registered():
             return True
         # 4) files may be set but the framework missed the events
-        try:
+        with contextlib.suppress(Exception):   # detached frame etc. — final check decides
             driver.execute_script("""
                 const i = [...document.querySelectorAll('input[type=file]')].pop();
                 if (i) {
                     i.dispatchEvent(new Event('input', {bubbles: true}));
                     i.dispatchEvent(new Event('change', {bubbles: true}));
                 }""")
-        except Exception:  # noqa: BLE001
-            pass
         return registered()
 
     @staticmethod
@@ -569,11 +610,9 @@ class TransferEngine:
                 raise CancelledError()
             btn = self._js_button(driver, label)
             if btn:
-                try:
+                with contextlib.suppress(Exception):   # re-rendered mid-click; retry
                     driver.execute_script("arguments[0].click();", btn)
                     return True
-                except Exception:  # noqa: BLE001 — re-rendered mid-click; retry
-                    pass
             if self._stop.wait(0.4):
                 raise CancelledError()
         self._log(f"'{label}' not found. Visible buttons: "
@@ -588,11 +627,9 @@ class TransferEngine:
                         "input[name*='email' i]", "input[id*='email' i]",
                         "input[placeholder*='email' i]"):
                 for el in driver.find_elements("css selector", sel):
-                    try:
+                    with contextlib.suppress(Exception):   # stale element
                         if el.is_displayed():
                             return el
-                    except Exception:  # noqa: BLE001
-                        continue
             return None
 
         el = self._poll(visible_email, 12)
@@ -606,10 +643,8 @@ class TransferEngine:
         for round_ in (1, 2):
             try:
                 el.click()
-                try:
+                with contextlib.suppress(Exception):   # some inputs refuse clear()
                     el.clear()
-                except Exception:  # noqa: BLE001
-                    pass
                 if self.opts.human_pace:
                     for ch in email:
                         el.send_keys(ch)
@@ -619,7 +654,7 @@ class TransferEngine:
                     el.send_keys(email)
             except CancelledError:
                 raise
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110 — typing failed; value check decides
                 pass
             if value_matches():
                 return True
@@ -635,7 +670,7 @@ class TransferEngine:
                 self._stop.wait(0.3)
         return value_matches()
 
-    def _page_progress(self, driver) -> Optional[dict]:
+    def _page_progress(self, driver) -> dict | None:
         """Real progress scraped from the page (None when not exposed)."""
         try:
             raw = driver.execute_script(PROGRESS_JS)
@@ -643,7 +678,7 @@ class TransferEngine:
             return None
         return raw if isinstance(raw, dict) else None
 
-    def _wait_for_link(self, driver, total_bytes: int) -> Optional[str]:
+    def _wait_for_link(self, driver, total_bytes: int) -> str | None:
         timeout = int(min(1800, 120 + total_bytes / (1024 * 1024) * 4))
         t0 = time.monotonic()
         last_pct = -1
@@ -680,7 +715,7 @@ class TransferEngine:
         return None
 
     @staticmethod
-    def _find_link(driver) -> Optional[str]:
+    def _find_link(driver) -> str | None:
         try:
             found = driver.execute_script("""
                 const re = /https:\\/\\/www\\.transfernow\\.net\\/(?:en\\/)?dl\\/[A-Za-z0-9-]+/;
@@ -703,7 +738,7 @@ class TransferEngine:
                 const els = [...document.querySelectorAll('div,section,p,span')]
                     .filter(e => /available for|link is ready/i.test(e.innerText || ''));
                 return els.length ? els[els.length - 1].innerText : '';""") or ""
-            m = re.search(r"available for\s+(\d+)\s*days", txt, re.I) \
+            m = re.search(r"available for\s+(\d+)\s*days", txt, re.IGNORECASE) \
                 or re.search(r"\b(\d{1,3})\s*days\b", txt)
             return f"{m.group(1)} days" if m else "7 days"
         except Exception:  # noqa: BLE001

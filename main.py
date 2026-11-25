@@ -1,4 +1,4 @@
-"""Transfer Now 1.0.0.0 — create and fetch TransferNow links from your desktop.
+"""Transfer Now 1.0.0.1 — create and fetch TransferNow links from your desktop.
 
     python main.py
 """
@@ -12,18 +12,19 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PyQt6.QtGui import QFont, QFontDatabase  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtCore import QByteArray
+from PyQt6.QtGui import QFont, QFontDatabase
+from PyQt6.QtWidgets import QApplication
 
-from core import procs  # noqa: E402
-from core.store import DATA_DIR, History, Settings  # noqa: E402
-from ui import icons  # noqa: E402
-from ui.ctx import Ctx  # noqa: E402
-from ui.i18n import i18n  # noqa: E402
-from ui.sounds import sounds  # noqa: E402
-from ui.theme import theme  # noqa: E402
-from ui.tips import tips  # noqa: E402
-from ui.window import AppWindow  # noqa: E402
+from core import procs
+from core.store import DATA_DIR, History, Settings, apply_pending_reset
+from ui import icons
+from ui.ctx import Ctx
+from ui.i18n import i18n
+from ui.sounds import sounds
+from ui.theme import theme
+from ui.tips import tips
+from ui.window import AppWindow
 
 
 def _install_excepthook() -> None:
@@ -47,23 +48,56 @@ def _install_excepthook() -> None:
 def _load_bundled_fonts() -> None:
     """Register the bundled Inter / Inter Tight variable fonts (Shade UI type)."""
     bases = []
-    meipass = getattr(sys, "_MEIPASS", None)          # PyInstaller runtime
-    if meipass:
+    meipass = getattr(sys, "_MEIPASS", None)          # PyInstaller data root:
+    if meipass:                                       # onefile temp dir AND onedir _internal/
         bases.append(os.path.join(meipass, "assets", "fonts"))
+    if getattr(sys, "frozen", False):
+        bases.append(os.path.join(os.path.dirname(sys.executable), "assets", "fonts"))
     bases.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "assets", "fonts"))
+                              "assets", "fonts"))     # dev (source) tree
     for base in bases:
-        if not os.path.isdir(base):
-            continue
+        found = False
         for name in ("Inter-Variable.ttf", "InterTight-Variable.ttf"):
             path = os.path.join(base, name)
             if os.path.exists(path):
                 QFontDatabase.addApplicationFont(path)
-        break
+                found = True
+        if found:                                     # first base that really has the fonts wins
+            return
+    try:                                              # nothing on disk: use the copy embedded in the exe
+        from ui import assets
+        for name in ("Inter-Variable.ttf", "InterTight-Variable.ttf"):
+            raw = assets.data("fonts/" + name)
+            if raw:
+                QFontDatabase.addApplicationFontFromData(QByteArray(raw))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _wait_for_previous_instance() -> None:
+    """After 'Reset everything' the app relaunches itself: let the old process finish
+    exiting first, so it cannot write its old files back after the wipe."""
+    pid = os.environ.pop("TN_WAIT_PID", "")
+    if not pid.isdigit():
+        return
+    import time
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        try:
+            import psutil
+            alive = psutil.pid_exists(int(pid))
+        except ImportError:
+            time.sleep(2.5)
+            return
+        if not alive:
+            return
+        time.sleep(0.15)
 
 
 def main() -> int:
     _install_excepthook()
+    _wait_for_previous_instance()
+    apply_pending_reset()                  # "Reset everything" finishes here, before loading
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     app = QApplication(sys.argv)
     app.setApplicationName("Transfer Now")
@@ -96,8 +130,9 @@ def main() -> int:
     settings.on_change(on_setting)
     try:
         app.styleHints().colorSchemeChanged.connect(lambda *_: theme.refresh_system(app))
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — Qt < 6.5 has no colorSchemeChanged
+        if sys.stderr is not None:      # None in a windowed (no-console) build
+            sys.stderr.write(f"colorSchemeChanged unavailable: {exc}\n")
 
     # Any way the app ends (window X, tray Quit, Ctrl+Q, OS shutdown): no browser is left.
     app.aboutToQuit.connect(procs.kill_all)

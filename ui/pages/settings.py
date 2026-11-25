@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from ..i18n import LANGS, i18n, tr
 from ..theme import ACCENTS, DEFAULT_ACCENT, THEME_LABELS, THEMES, theme
 from ..menus import LineEdit
+from ..smoothscroll import enable_smooth_scroll
 from ..sounds import sounds
 from ..widgets import (
     Button, ElidedLabel, FlagButton, NavButton, Segmented, Switch, Swatch,
@@ -456,6 +457,11 @@ class SettingsPage(Page):
             QUrl.fromLocalFile(os.path.dirname(s.path))))
         self.appdata_title, self.appdata_label = self._labeled_row(
             lay, tr("set.app_data"), os.path.dirname(s.path), self.loc_btn, last=True)
+        lay.addWidget(hline())
+        self.reset_btn = Button(tr("reset.btn"), "danger", "refresh", "sm")
+        self.reset_btn.clicked.connect(self._reset_everything)
+        self.reset_title, self.reset_desc = self._labeled_row(
+            lay, tr("reset.title"), tr("reset.desc"), self.reset_btn, last=True)
         body.addWidget(card)
         body.addStretch(1)
 
@@ -522,6 +528,7 @@ class SettingsPage(Page):
         sa.setFrameShape(QFrame.Shape.NoFrame)
         sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         sa.setMinimumHeight(430)
+        enable_smooth_scroll(sa)
         host = QWidget()
         host.setObjectName("page")
         sa.setWidget(host)
@@ -650,6 +657,24 @@ class SettingsPage(Page):
             self.ctx.clear_history()
             self.ctx.toast(tr("toast.history_cleared"), "info")
 
+    def _reset_everything(self) -> None:
+        """Factory reset: wipe all app data, then restart the app as if freshly installed."""
+        from core import procs
+        from core.store import request_reset
+        if not confirm(self.window(), tr("reset.confirm_title"), tr("reset.confirm_text"),
+                       tr("reset.confirm_info"), yes=tr("reset.confirm_yes"), danger=True):
+            return
+        if not request_reset():
+            self.ctx.toast(tr("reset.failed"), "error")
+            return
+        procs.relaunch()                 # waits for this process to exit, wipes, then starts clean
+        win = self.window()
+        if hasattr(win, "close"):
+            try:
+                win.close(force=True)
+            except TypeError:
+                win.close()
+
     def _retranslate(self) -> None:
         for key, tkey, _ic in SECTIONS:
             self.nav_btns[key].set_text(tr(tkey))
@@ -721,6 +746,9 @@ class SettingsPage(Page):
         self.exp_desc.setText(tr("set.export_desc"))
         self.exp_btn.setText(tr("set.export"))
         self.loc_btn.setText(tr("btn.open_folder"))
+        self.reset_title.setText(tr("reset.title"))
+        self.reset_desc.setText(tr("reset.desc"))
+        self.reset_btn.setText(tr("reset.btn"))
         # about
         self.feat_card_title.setText(tr("about.features"))
         self.build_card_title.setText(tr("about.build"))

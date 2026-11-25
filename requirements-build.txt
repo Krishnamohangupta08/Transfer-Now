@@ -1,2 +1,6 @@
-pyinstaller>=6.6
-pillow>=10.0
+# Build-only dependencies (PyInstaller packaging) — install on top of requirements.txt:
+#   pip install -r requirements.txt -r requirements-build.txt
+# build_exe.sh / build_exe.bat install this file automatically; build.py also
+# pip-installs anything missing at build time.
+pyinstaller>=6.6    # verified: 6.22 builds this app (onedir + onefile)
+pillow>=10.0        # tools/make_icon.py — generates assets/icon.* when missing; verified: 11.x

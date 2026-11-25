@@ -1,12 +1,14 @@
 """Build Transfer Now into a Windows .exe (or a macOS / Linux app) with PyInstaller.
 
     python build.py              # both: single file AND folder
-    python build.py onefile      # dist/onefile/TransferNow.exe          (one portable file)
-    python build.py onedir       # dist/onedir/TransferNow/TransferNow.exe (folder, starts faster)
-    python build.py both --zip   # also zip the folder build for sharing
+    python build.py onefile      # dist/onefile/TransferNow(.exe)            (one portable file)
+    python build.py onedir       # Windows/Linux: dist/onedir/TransferNow/TransferNow(.exe)
+                                 # macOS:         dist/onedir/TransferNow.app  (bundle)
+    python build.py both         # always ends with ready-to-upload .zip file(s) in dist/
 
 Options:  --console  keep a console window (debugging)   --dry-run  print the commands only
           --no-clean keep PyInstaller's cache             --skip-icon  don't (re)generate the icon
+          --no-zip   skip the zip step (zips are ALWAYS made by default)
 
 PyInstaller does not cross-compile: build the .exe on Windows.
 """
@@ -20,7 +22,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 NAME = "TransferNow"
-VERSION = "1.0.0.0"
+from core.version import FILE_VERSION_STR as VERSION  # single source of truth
 AUTHOR = "Krishna Mohan Gupta"
 ASSETS = os.path.join(ROOT, "assets")
 
@@ -86,7 +88,21 @@ def command(mode: str, console: bool, clean: bool) -> list[str]:
             "--workpath", os.path.join(ROOT, "build", mode),
             "--specpath", os.path.join(ROOT, "build", mode),
             "--collect-all", "selenium",                 # ships selenium-manager (auto chromedriver)
-            "--add-data", os.path.join(ASSETS, "fonts") + os.pathsep + "assets",
+            # Runtime asset paths must match what main.py (_load_bundled_fonts) and
+            # ui/about.py (asset_path) look up under sys._MEIPASS:
+            #   fonts + license -> <bundle>/assets/fonts/   photo -> <bundle>/assets/
+            # NOTE: for a directory source PyInstaller copies its *contents* into dest,
+            # so dest must already end in "fonts".  The window/taskbar icon needs no
+            # data file: ui/icons.py renders it from inline SVG; icon.ico/.icns/.png
+            # are only passed to --icon (embedded in the binary / .app bundle).
+            "--add-data", os.path.join(ASSETS, "fonts") + os.pathsep + os.path.join("assets", "fonts"),
+            "--add-data", os.path.join(ASSETS, "developer.png") + os.pathsep + "assets",
+            "--add-data", os.path.join(ASSETS, "banners") + os.pathsep + os.path.join("assets", "banners"),
+            "--add-data", os.path.join(os.path.dirname(os.path.abspath(__file__)), "CHANGELOG.md") + os.pathsep + ".",
+            "--add-data", ASSETS + os.pathsep + "assets",     # whole folder: nothing visible gets left behind
+            "--hidden-import", "ui.embedded_assets",       # embedded fallback copy of photo/banners/fonts
+            "--hidden-import", "ui.assets",
+            "--hidden-import", "ui.iconfx",
             "--hidden-import", "PyQt6.QtSvg",
             "--hidden-import", "psutil",
             "--hidden-import", "PyQt6.QtMultimedia",     # sound effects
@@ -100,10 +116,19 @@ def command(mode: str, console: bool, clean: bool) -> list[str]:
 
 
 def result_path(mode: str) -> str:
-    exe = NAME + (".exe" if os.name == "nt" else ".app" if sys.platform == "darwin" and mode == "onedir" else "")
+    """Where PyInstaller puts the built app for this OS / mode.
+
+    Windows onefile  dist/onefile/TransferNow.exe      Linux onefile  dist/onefile/TransferNow
+    Windows onedir   dist/onedir/TransferNow/TransferNow.exe          Linux onedir  .../TransferNow
+    macOS onefile    dist/onefile/TransferNow (plain Unix executable, *not* a .app)
+    macOS onedir     dist/onedir/TransferNow.app  (bundle directly under dist/onedir)
+    """
+    exe = NAME + (".exe" if os.name == "nt" else "")
+    if sys.platform == "darwin" and mode == "onedir":
+        return os.path.join(ROOT, "dist", "onedir", NAME + ".app")
     if mode == "onefile":
         return os.path.join(ROOT, "dist", "onefile", exe)
-    return os.path.join(ROOT, "dist", "onedir", NAME, exe if os.name == "nt" else NAME)
+    return os.path.join(ROOT, "dist", "onedir", NAME, exe)
 
 
 def size_text(path: str) -> str:
@@ -116,6 +141,25 @@ def size_text(path: str) -> str:
     return f"{total / 1024 / 1024:.1f} MB"
 
 
+def make_zip(mode: str) -> str:
+    """Zip a finished build -> dist/ (always done, so there is one file to upload).
+
+    onefile -> dist/TransferNow-portable.zip   (the single TransferNow executable)
+    onedir  -> dist/TransferNow-folder.zip     (the whole TransferNow folder / .app)
+    """
+    dist = os.path.join(ROOT, "dist")
+    if mode == "onefile":
+        out = os.path.join(dist, "onefile")
+        z = shutil.make_archive(os.path.join(dist, f"{NAME}-portable"), "zip", out,
+                                os.path.basename(result_path("onefile")))
+    else:
+        z = shutil.make_archive(os.path.join(dist, f"{NAME}-folder"), "zip",
+                                os.path.join(dist, "onedir"),
+                                NAME + ".app" if sys.platform == "darwin" else NAME)
+    print(f"[zip    ] {z}")
+    return z
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("mode", nargs="?", default="both", choices=("onefile", "onedir", "both"))
@@ -123,13 +167,17 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-clean", action="store_true")
     ap.add_argument("--skip-icon", action="store_true")
-    ap.add_argument("--zip", action="store_true", help="zip the folder build")
+    ap.add_argument("--zip", action="store_true", help="(default, kept for compatibility) zip the build")
+    ap.add_argument("--no-zip", action="store_true", help="do not create the .zip files")
     a = ap.parse_args()
 
     os.chdir(ROOT)
     ensure_tools(a.skip_icon, a.dry_run)
+    if not a.dry_run:                       # refresh the embedded copy of photo / banners / fonts / changelog
+        subprocess.check_call([sys.executable, os.path.join(ROOT, "tools", "embed_assets.py")])
     modes = ("onefile", "onedir") if a.mode == "both" else (a.mode,)
     built: list[str] = []
+    zips: list[str] = []
     for mode in modes:
         cmd = command(mode, a.console, not a.no_clean)
         print(f"\n=== {mode} ===\n" + " ".join(f'"{c}"' if " " in c else c for c in cmd) + "\n")
@@ -142,11 +190,14 @@ def main() -> int:
 
     for mode in built:
         out = result_path(mode)
-        print(f"[{mode:7s}] {out}  ({size_text(out if mode == 'onefile' else os.path.dirname(out))})")
-        if mode == "onedir" and a.zip:
-            z = shutil.make_archive(os.path.join(ROOT, "dist", f"{NAME}-folder"), "zip",
-                                    os.path.join(ROOT, "dist", "onedir"), NAME)
-            print(f"[zip    ] {z}")
+        size_of = out if (mode == "onefile" or sys.platform == "darwin") else os.path.dirname(out)
+        print(f"[{mode:7s}] {out}  ({size_text(size_of)})")
+        if not a.no_zip:
+            zips.append(make_zip(mode))
+    if zips:
+        print("\nReady to upload:")
+        for z in zips:
+            print(f"  {z}  ({size_text(z)})")
     return 0
 
 

@@ -10,6 +10,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 from typing import Optional
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -126,53 +127,110 @@ class FetchThread(QThread):
             self.failed.emit(self.token, f"{type(exc).__name__}: {exc}")
 
 
-class ZipThread(QThread):
-    """Zip a folder into a temp file so it can be uploaded as one file."""
-    done = pyqtSignal(str, str)              # folder, zip path
-    failed = pyqtSignal(str, str)            # folder, message
-
-    def __init__(self, folder: str, parent=None) -> None:
-        super().__init__(parent)
-        self.folder = folder
-        self.tmp_dir = ""
-
-    def run(self) -> None:
-        try:
-            self.tmp_dir = tempfile.mkdtemp(prefix="transfernow-zip-")
-            name = os.path.basename(os.path.normpath(self.folder)) or "folder"
-            base = os.path.join(self.tmp_dir, name)
-            path = shutil.make_archive(base, "zip", root_dir=self.folder)
-            self.done.emit(self.folder, path)
-        except Exception as exc:  # noqa: BLE001
-            self.failed.emit(self.folder, f"{type(exc).__name__}: {exc}")
-
 
 # Housekeeping files nobody means to share when a whole folder is picked.
 JUNK_FILES = {"thumbs.db", "desktop.ini", ".ds_store", "ehthumbs.db"}
 
 
-def scan_folder(folder: str, stop=lambda: False) -> list[str]:
-    """Every readable, non-empty file under ``folder`` (recursive, sorted, no symlink loops)."""
+# Untrusted-name screening: whole-folder sweeps must not silently ingest
+# credentials, keys or hidden files.  The policy lives in ``core/filesafety.py``
+# (security patch); a minimal fallback keeps the behaviour sane while absent.
+try:
+    from .filesafety import screen_batch
+except ImportError:  # graceful: falls back until the security patch lands
+
+    def _fb_within(child: str, parent: str) -> bool:
+        try:
+            return os.path.commonpath([child, parent]) == os.path.normpath(parent)
+        except ValueError:
+            return False
+
+    def screen_batch(paths: list[str], root: str = "") -> tuple[list[str], list[str]]:
+        """Stand-in for ``filesafety.screen_batch`` (same contract): SKIP links
+        / unreadable files, FLAG obvious secrets.  ``allowed`` holds every
+        non-SKIP path; ``flagged`` reports FLAG entries as
+        ``"path — reason"`` strings (em dash)."""
+        allowed: list[str] = []
+        flagged: list[str] = []
+        secret_dirs = {".ssh", ".aws", ".gnupg", ".kube", ".password-store"}
+        secret_exts = (".pem", ".key", ".p12", ".pfx", ".kdbx", ".keystore", ".jks")
+        for p in paths or []:
+            try:
+                if not os.path.isfile(p) or not os.access(p, os.R_OK):
+                    continue                        # SKIP: never enters a transfer
+                if os.path.islink(p):
+                    base = os.path.realpath(root) if root else \
+                        os.path.dirname(os.path.realpath(p))
+                    if not _fb_within(os.path.realpath(p), base):
+                        continue                    # SKIP: link escapes the root
+                lower = os.path.basename(p).lower()
+                parts = os.path.normpath(p).split(os.sep)
+                reason = ""
+                if lower.startswith("."):
+                    reason = "hidden file"
+                elif lower.endswith(".env"):
+                    reason = "environment / secrets file"
+                elif (lower.startswith(("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"))
+                        or lower.endswith(secret_exts)):
+                    reason = "private key / credential file"
+                elif any(part.lower() in secret_dirs for part in parts[:-1]):
+                    reason = "credential store folder"
+                elif lower in ("thumbs.db", "desktop.ini", ".ds_store", "ehthumbs.db"):
+                    reason = "system junk"
+                allowed.append(p)                   # FLAG stays addable (explicit decision)
+                if reason:
+                    flagged.append(f"{p} — {reason}")
+            except OSError:
+                continue                            # SKIP: unreadable
+        return allowed, flagged
+
+def scan_folder(folder: str, stop=lambda: False,
+                progress=None) -> tuple[list[str], list[str], int]:
+    """Screened contents of ``folder``: ``(allowed, flagged, skipped_count)``.
+
+    Every readable, non-empty file under ``folder`` (recursive, sorted, no
+    symlink loops) passes through ``filesafety.screen_batch``: risky files come
+    back as ``"path — reason"`` strings (not in ``allowed``), links/junk are
+    counted and dropped.  ``progress(files_found_so_far)`` is called at most
+    every ~250 ms of work.
+    """
     found: list[str] = []
+    skipped = 0
+    last_report = 0.0
     for root, dirs, names in os.walk(folder, followlinks=False):
         if stop():
             break
         dirs.sort()
         for n in sorted(names):
+            if stop():
+                break
             if n.lower() in JUNK_FILES:
+                skipped += 1
                 continue
             p = os.path.join(root, n)
             try:
                 if os.path.isfile(p) and os.access(p, os.R_OK) and os.path.getsize(p) > 0:
                     found.append(p)
+                else:
+                    skipped += 1
             except OSError:
+                skipped += 1
                 continue
-    return found
+            if progress is not None:
+                now = time.monotonic()
+                if now - last_report >= 0.25:       # cheap: ≤4 emissions / second
+                    last_report = now
+                    progress(len(found))
+    allowed, flagged = screen_batch(found, folder)
+    skipped += len(found) - len(allowed)            # SKIP drops: links, unreadable, ...
+    flagged_paths = {s.rsplit(" — ", 1)[0] for s in flagged}
+    return [p for p in allowed if p not in flagged_paths], flagged, skipped
 
 
 class FolderScanThread(QThread):
     """Walk a folder off the UI thread and hand back the files inside it."""
-    done = pyqtSignal(str, list)             # folder, file paths
+    progress = pyqtSignal(str, int)          # folder, files found so far
+    done = pyqtSignal(str, list, list, int)  # folder, files, flagged, skipped count
     failed = pyqtSignal(str, str)            # folder, message
 
     def __init__(self, folder: str, parent=None) -> None:
@@ -185,9 +243,47 @@ class FolderScanThread(QThread):
 
     def run(self) -> None:
         try:
-            self.done.emit(self.folder, scan_folder(self.folder, lambda: self._stop))
+            files, flagged, skipped = scan_folder(
+                self.folder, lambda: self._stop,
+                lambda n: self.progress.emit(self.folder, n))
+            self.done.emit(self.folder, files, flagged, skipped)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(self.folder, f"{type(exc).__name__}: {exc}")
+
+
+class ZipThread(QThread):
+    """Build the smart ZIP archive off the UI thread (progress + cancel)."""
+    progress = pyqtSignal(int, int, str)     # bytes done, bytes total, current file name
+    done = pyqtSignal(object)                # core.ziputil.ZipResult
+    failed = pyqtSignal(str)                 # user-facing message
+    cancelled = pyqtSignal()
+
+    def __init__(self, paths: list[str], parent=None) -> None:
+        super().__init__(parent)
+        self.paths = list(paths)
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def run(self) -> None:
+        from . import ziputil
+        try:
+            res = ziputil.build_archive(
+                self.paths,
+                progress=lambda d, t, n: self.progress.emit(d, t, n),
+                should_stop=self._stop.is_set)
+            if self._stop.is_set():                       # cancelled right at the end
+                ziputil.cleanup_archive(res.path)
+                self.cancelled.emit()
+            else:
+                self.done.emit(res)
+        except ziputil.ZipCancelled:
+            self.cancelled.emit()
+        except ziputil.ZipError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
 class LinkCheckThread(QThread):

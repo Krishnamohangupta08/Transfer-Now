@@ -1,4 +1,4 @@
-"""Transfer Now 1.0.0.0 — "Porcelain & Signal" design system.
+"""Transfer Now 1.0.0.1 — "Porcelain & Signal" design system.
 
 Every colour and control metric lives here.  ``theme.apply()`` rebuilds one
 application stylesheet (only when the theme/accent really changes).
@@ -439,12 +439,14 @@ QHeaderView::section {{ background: transparent; color: {c['muted']}; border: no
     padding: 10px 10px; font-size: 12px; font-weight: 500; text-align: left; }}
 QTableCornerButton::section {{ background: transparent; border: none; }}
 
-QScrollBar:vertical {{ background: transparent; width: 12px; border-radius: 6px; margin: 0; }}
-QScrollBar::handle:vertical {{ background: {c['border_strong']}; border-radius: 3px; min-height: 36px; margin: 3px 3px; }}
+QScrollBar:vertical {{ background: transparent; border: none; width: 10px; margin: 18px 0px 18px 0px; padding: 0px; }}
+QScrollBar::handle:vertical {{ background: {c['border_strong']}; border: none; border-radius: 5px; min-height: 44px; margin: 0px; }}
 QScrollBar::handle:vertical:hover {{ background: {c['muted']}; }}
-QScrollBar:horizontal {{ background: transparent; height: 12px; border-radius: 6px; margin: 0; }}
-QScrollBar::handle:horizontal {{ background: {c['border_strong']}; border-radius: 3px; min-width: 36px; margin: 3px 3px; }}
+QScrollBar::handle:vertical:pressed {{ background: {c['text2']}; }}
+QScrollBar:horizontal {{ background: transparent; border: none; height: 10px; margin: 0px 18px 0px 18px; padding: 0px; }}
+QScrollBar::handle:horizontal {{ background: {c['border_strong']}; border: none; border-radius: 5px; min-width: 44px; margin: 0px; }}
 QScrollBar::handle:horizontal:hover {{ background: {c['muted']}; }}
+QScrollBar::handle:horizontal:pressed {{ background: {c['text2']}; }}
 QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{ background: none; border: none; width: 0; height: 0; }}
 QAbstractScrollArea::corner {{ background: transparent; border: none; width: 0; height: 0; }}
 
@@ -454,6 +456,7 @@ QMenu::indicator {{ width: 14px; height: 14px; margin-left: 8px; }}
 QMenu::right-arrow {{ margin-right: 10px; }}
 QMenu::icon {{ padding-left: 8px; }}
 QMenu::item:selected {{ background: {c['surface3']}; color: {c['text']}; }}
+QMenu#thememenu::item:checked {{ background: {c['accent_soft']}; color: {c['text']}; }}
 QMenu::item:disabled {{ color: {c['muted']}; }}
 QMenu::separator {{ height: 1px; background: {c['hairline']}; margin: 5px 8px; }}
 QToolTip {{ background: {tip_bg}; color: {tip_text}; border: 1px solid {tip_border};

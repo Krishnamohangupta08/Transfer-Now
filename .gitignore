@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build output
+build/
+dist/
+*.spec
+
+# Local artifacts
+release_results.json
+lint-out/
+.coverage
+.DS_Store
+Thumbs.db

@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QFrame, QMenuBar, QPushButton, QWidget
 
 from . import icons
 from .i18n import i18n, tr
+from .iconfx import AnimatedLogo
 from .sounds import sounds
 from .theme import theme
 from .widgets import hbox, kbd, label
@@ -117,8 +118,11 @@ class PaletteButton(QFrame):
         lay.addWidget(self.keys, 0, Qt.AlignmentFlag.AlignVCenter)
         self.setToolTip("Command palette (Ctrl+K)")
         theme.changed.connect(self.refresh)
-        i18n.changed.connect(lambda: self.text.setText(tr("tb.search")))
+        i18n.changed.connect(self._on_language)   # bound method: auto-disconnects on delete
         self.refresh()
+
+    def _on_language(self) -> None:
+        self.text.setText(tr("tb.search"))
 
     def mousePressEvent(self, e) -> None:  # noqa: N802
         # swallow the press so the title bar never starts a window drag (which eats the click)
@@ -144,10 +148,9 @@ class TitleBar(QFrame):
         self._win = win
         self.setObjectName("titlebar")
         self.setFixedHeight(self.HEIGHT)
-        lay = hbox(self, (12, 0, 0, 0), 8)
+        lay = hbox(self, (10, 0, 0, 0), 8)
         lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.logo = label("")
-        self.logo.setFixedSize(20, 20)
+        self.logo = AnimatedLogo(20, pad=2, drag_through=True)
         lay.addWidget(self.logo)
         self.title = label("Transfer Now", "h2")
         self.title.setStyleSheet("font-size: 13px; font-weight: 600; letter-spacing: 0px;")
@@ -174,8 +177,6 @@ class TitleBar(QFrame):
         self.palette_btn.setParent(self)
         self.palette_btn.raise_()
         self.sync()
-        theme.changed.connect(self._logo)
-        self._logo()
 
     def resizeEvent(self, e) -> None:  # noqa: N802
         super().resizeEvent(e)
@@ -187,7 +188,7 @@ class TitleBar(QFrame):
 
     def _place_palette(self) -> None:
         w = self.width()
-        left = self.layout().contentsMargins().left() + 20 + 8 + self.title.sizeHint().width() + 10 \
+        left = self.layout().contentsMargins().left() + 24 + 8 + self.title.sizeHint().width() + 10 \
             + self.menubar.sizeHint().width()
         right = CaptionButton.WIDTH * 3
         avail = w / 2 - max(left, right) - 16          # half-width free on each side of centre
@@ -195,9 +196,6 @@ class TitleBar(QFrame):
         self.palette_btn.setFixedSize(pw, 28)
         self.palette_btn.move(int((w - pw) / 2), int((self.height() - 28) / 2))
         self.palette_btn.keys.setVisible(pw >= 260)
-
-    def _logo(self) -> None:
-        self.logo.setPixmap(icons.logo_pixmap(20))
 
     def _minimize(self) -> None:
         sounds.play("minimize")

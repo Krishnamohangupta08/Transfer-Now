@@ -14,11 +14,12 @@ from PyQt6.QtWidgets import (
 from . import icons, motion
 from .about import DeveloperHero, FeatureGrid, tech_string
 from .i18n import tr
+from .iconfx import AnimatedLogo
 from .sounds import sounds
 from .menus import LineEdit
 from .widgets import Badge, Button, hbox, hline, kbd, label, vbox
 
-VERSION = "1.0.0.0"
+from core.version import APP_VERSION as VERSION  # single source of truth
 AUTHOR = "Krishna Mohan Gupta"
 
 SHORTCUTS = [
@@ -142,8 +143,7 @@ class AboutDialog(FramelessDialog):
 
         # ---- app identity row
         ident = hbox(spacing=14)
-        logo = label("")
-        logo.setPixmap(icons.logo_pixmap(44))
+        logo = AnimatedLogo(44, pad=4)
         ident.addWidget(logo, 0, Qt.AlignmentFlag.AlignTop)
         col = vbox(spacing=2)
         col.addWidget(label("Transfer Now", "h2"))
